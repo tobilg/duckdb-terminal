@@ -1,0 +1,4 @@
+# Required headers for SharedArrayBuffer (needed by DuckDB WASM)
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
