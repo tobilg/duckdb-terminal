@@ -1,0 +1,8 @@
+# robots.txt for DuckDB Terminal
+# https://terminal.sql-workbench.com/
+
+User-agent: *
+Allow: /
+
+# Sitemap location
+Sitemap: https://terminal.sql-workbench.com/sitemap.xml

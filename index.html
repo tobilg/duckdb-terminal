@@ -3,7 +3,90 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DuckDB Terminal</title>
+    <title>DuckDB Terminal - Browser-based SQL Terminal</title>
+    <meta name="description" content="DuckDB Terminal - A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with a modern terminal interface." />
+    <meta name="keywords" content="DuckDB, SQL, terminal, database, browser, query, WASM, analytics" />
+    <meta name="author" content="TobiLG" />
+    <link rel="canonical" href="https://terminal.sql-workbench.com/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="DuckDB Terminal - Browser-based SQL Terminal" />
+    <meta property="og:description" content="A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser." />
+    <meta property="og:url" content="https://terminal.sql-workbench.com/" />
+    <meta property="og:image" content="https://terminal.sql-workbench.com/images/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="DuckDB Terminal - Browser-based SQL Terminal" />
+    <meta name="twitter:description" content="A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser." />
+    <meta name="twitter:image" content="https://terminal.sql-workbench.com/images/og.png" />
+
+    <!-- Additional OG tags -->
+    <meta property="og:site_name" content="DuckDB Terminal" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image:alt" content="DuckDB Terminal - Browser-based SQL Terminal Interface" />
+
+    <!-- Additional meta -->
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#1e1e1e" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="DuckDB Terminal" />
+    <link rel="apple-touch-icon" href="/images/og.png" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "DuckDB Terminal",
+      "description": "A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with a modern terminal interface.",
+      "url": "https://terminal.sql-workbench.com/",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Any",
+      "browserRequirements": "Requires JavaScript. Requires WebAssembly support.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "TobiLG",
+        "url": "https://github.com/tobilg"
+      },
+      "screenshot": "https://terminal.sql-workbench.com/images/og.png"
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "DuckDB Terminal",
+      "description": "Browser-based SQL terminal powered by DuckDB WASM and Ghostty",
+      "applicationCategory": "WebApplication",
+      "operatingSystem": "Web Browser",
+      "softwareVersion": "0.1.0",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": [
+        "Run SQL queries in browser",
+        "DuckDB WASM powered",
+        "Multiple color themes",
+        "File upload support",
+        "CSV/TSV/JSON export"
+      ]
+    }
+    </script>
+
     <link rel="icon" type="image/svg+xml" href="/duck.svg" />
     <style>
       * {
@@ -349,6 +432,17 @@
     </style>
   </head>
   <body>
+    <noscript>
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1e1e1e; color: #d4d4d4; font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 20px;">
+        <h1 style="font-size: 24px; margin-bottom: 16px;">JavaScript Required</h1>
+        <p style="max-width: 400px; line-height: 1.6; margin-bottom: 16px;">
+          DuckDB Terminal requires JavaScript and WebAssembly to run SQL queries in your browser.
+        </p>
+        <p style="color: #888; font-size: 14px;">
+          Please enable JavaScript in your browser settings to use this application.
+        </p>
+      </div>
+    </noscript>
     <div id="app">
       <aside class="sidebar">
         <div class="sidebar-top">
