@@ -201,4 +201,97 @@ describe('InputBuffer', () => {
       expect(buffer.getContent()).toBe('abc');
     });
   });
+
+  describe('multi-line support', () => {
+    beforeEach(() => {
+      // Set up a terminal width of 20 and prompt length of 3 (e.g., "🦆 ")
+      buffer.setTerminalWidth(20);
+      buffer.setPromptLength(3);
+    });
+
+    it('should track terminal width', () => {
+      expect(buffer.getTerminalWidth()).toBe(20);
+    });
+
+    it('should track prompt length', () => {
+      expect(buffer.getPromptLength()).toBe(3);
+    });
+
+    it('should calculate position on first line', () => {
+      buffer.insert('hello');
+      // Position should be at row 0, col 3 (prompt) + 5 (content) = col 8
+      const pos = buffer.getCursorPosition();
+      expect(pos.row).toBe(0);
+      expect(pos.col).toBe(8); // 3 (prompt) + 5 (chars)
+    });
+
+    it('should calculate position when text wraps to second line', () => {
+      // Terminal width 20, prompt 3, so first line has 17 chars available
+      // Insert 20 chars to wrap to second line
+      buffer.insert('12345678901234567890'); // 20 chars
+      const pos = buffer.getCursorPosition();
+      // First line: 17 chars, remaining 3 chars on second line
+      expect(pos.row).toBe(1);
+      expect(pos.col).toBe(3); // 20 - 17 = 3 chars on second row
+    });
+
+    it('should calculate position for multiple wrapped lines', () => {
+      // Insert 60 chars with terminal width 20 and prompt 3
+      // First line: 17 chars, then 20 chars per line
+      // 60 chars = 17 + 20 + 20 + 3 = row 3, col 3
+      buffer.insert('a'.repeat(60));
+      const pos = buffer.getCursorPosition();
+      expect(pos.row).toBe(3);
+      expect(pos.col).toBe(3); // (60 - 17) % 20 = 43 % 20 = 3
+    });
+
+    it('should get row count correctly', () => {
+      buffer.insert('12345678901234567'); // 17 chars, exactly first line
+      expect(buffer.getRowCount()).toBe(1);
+
+      buffer.insert('8'); // 18 chars, wraps to second line
+      expect(buffer.getRowCount()).toBe(2);
+    });
+
+    it('should calculate end position correctly', () => {
+      buffer.insert('1234567890123456789012345'); // 25 chars
+      // 17 on first line, 8 on second line
+      const endPos = buffer.getEndPosition();
+      expect(endPos.row).toBe(1);
+      expect(endPos.col).toBe(8); // 25 - 17 = 8
+    });
+
+    it('should handle position at exactly line boundary', () => {
+      // First line has 17 chars available
+      buffer.insert('12345678901234567'); // exactly 17 chars
+      const pos = buffer.getCursorPosition();
+      expect(pos.row).toBe(0);
+      expect(pos.col).toBe(20); // 3 + 17 = 20 (at end of first line)
+    });
+
+    it('should get position at specific offset', () => {
+      buffer.insert('hello world test'); // 16 chars
+      // Position at offset 5 (after "hello")
+      const pos = buffer.getPositionAt(5);
+      expect(pos.row).toBe(0);
+      expect(pos.col).toBe(8); // 3 (prompt) + 5 = 8
+    });
+
+    it('should handle cursor movement across line boundaries', () => {
+      // Fill first line and a bit of second line
+      buffer.insert('1234567890123456789012'); // 22 chars (17 + 5)
+
+      // Move cursor left to wrap to previous line
+      buffer.moveLeft();
+      buffer.moveLeft();
+      buffer.moveLeft();
+      buffer.moveLeft();
+      buffer.moveLeft();
+      buffer.moveLeft(); // Now at position 16, still on first line
+
+      const pos = buffer.getCursorPosition();
+      expect(pos.row).toBe(0);
+      expect(pos.col).toBe(19); // 3 + 16 = 19
+    });
+  });
 });

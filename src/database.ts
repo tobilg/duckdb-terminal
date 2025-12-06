@@ -384,14 +384,21 @@ export class Database {
   /**
    * Gets a list of all tables in the database.
    *
-   * Queries the information_schema to retrieve table names from the 'main' schema.
+   * Queries all attached databases and returns tables with their qualified names
+   * when multiple databases are present, or just the table name when only the
+   * default 'memory' database exists.
    *
-   * @returns A promise that resolves to an array of table names
+   * @returns A promise that resolves to an array of table names (qualified if multiple databases)
    *
    * @example
    * ```typescript
+   * // Single database
    * const tables = await db.getTables();
    * console.log('Tables:', tables); // ['users', 'products', 'orders']
+   *
+   * // With attached database
+   * const tables = await db.getTables();
+   * console.log('Tables:', tables); // ['users', 'mydb.products']
    * ```
    */
   async getTables(): Promise<string[]> {
@@ -400,10 +407,45 @@ export class Database {
     }
 
     try {
-      const result = await this.executeQuery(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' ORDER BY table_name"
+      // Get all databases to find which one is the default (internal = true)
+      // The default database doesn't need a prefix
+      const dbResult = await this.executeQuery(
+        'SELECT database_name, internal FROM duckdb_databases()'
       );
-      return result.rows.map((row) => String(row[0]));
+      const databases = dbResult.rows.map((row) => ({
+        name: String(row[0]),
+        internal: Boolean(row[1]),
+      }));
+      const defaultDbName = databases.find((db) => db.internal)?.name || 'memory';
+      const hasMultipleDatabases = databases.length > 1;
+
+      // Get all tables from all databases (all schemas, not just 'main')
+      const result = await this.executeQuery(
+        'SELECT table_catalog, table_schema, table_name FROM information_schema.tables ORDER BY table_catalog, table_schema, table_name'
+      );
+
+      return result.rows.map((row) => {
+        const catalog = String(row[0]);
+        const schema = String(row[1]);
+        const tableName = String(row[2]);
+
+        // Build qualified name based on context:
+        // - <default_db>.main.table -> table (default database and schema)
+        // - <default_db>.other.table -> other.table (non-default schema)
+        // - mydb.main.table -> mydb.table (attached database, default schema)
+        // - mydb.other.table -> mydb.other.table (attached database, non-default schema)
+        const needsCatalog = hasMultipleDatabases && catalog !== defaultDbName;
+        const needsSchema = schema !== 'main';
+
+        if (needsCatalog && needsSchema) {
+          return `${catalog}.${schema}.${tableName}`;
+        } else if (needsCatalog) {
+          return `${catalog}.${tableName}`;
+        } else if (needsSchema) {
+          return `${schema}.${tableName}`;
+        }
+        return tableName;
+      });
     } catch {
       return [];
     }

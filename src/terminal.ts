@@ -306,23 +306,44 @@ export class DuckDBTerminal implements TerminalInterface {
       return;
     }
 
-    const cursorPos = this.inputBuffer.getCursorPos();
+    const cursorPosition = this.inputBuffer.getCursorPosition();
+    const endPosition = this.inputBuffer.getEndPosition();
     const highlighted = highlightSQL(content);
 
-    // Move cursor to start of input (after prompt)
-    if (cursorPos > 0) {
-      this.write(vt100.cursorLeft(cursorPos));
+    // Move cursor to start of input (row 0, after prompt)
+    const startPosition = { row: 0, col: this.inputBuffer.getPromptLength() };
+
+    // Move to start position
+    let moveToStart = '';
+    if (cursorPosition.row > 0) {
+      moveToStart += vt100.cursorUp(cursorPosition.row);
+    }
+    moveToStart += vt100.cursorColumn(startPosition.col + 1);
+    this.write(moveToStart);
+
+    // Clear from start to end of content (all rows)
+    this.write(vt100.CLEAR_TO_END);
+    for (let row = 1; row <= endPosition.row; row++) {
+      this.write(vt100.cursorDown(1));
+      this.write(vt100.cursorColumn(1));
+      this.write(vt100.CLEAR_TO_END);
     }
 
-    // Clear line from cursor and write highlighted content
-    this.write(vt100.CLEAR_TO_END);
+    // Move back to start and write highlighted content
+    if (endPosition.row > 0) {
+      this.write(vt100.cursorUp(endPosition.row));
+    }
+    this.write(vt100.cursorColumn(startPosition.col + 1));
     this.write(highlighted);
 
     // Move cursor back to original position
-    const charsAfterCursor = content.length - cursorPos;
-    if (charsAfterCursor > 0) {
-      this.write(vt100.cursorLeft(charsAfterCursor));
+    const newEndPosition = this.inputBuffer.getEndPosition();
+    let moveBack = '';
+    if (newEndPosition.row > cursorPosition.row) {
+      moveBack += vt100.cursorUp(newEndPosition.row - cursorPosition.row);
     }
+    moveBack += vt100.cursorColumn(cursorPosition.col + 1);
+    this.write(moveBack);
   }
 
   /**
@@ -398,6 +419,14 @@ export class DuckDBTerminal implements TerminalInterface {
 
     // Set up input handling
     this.terminalAdapter.onData(this.handleInput.bind(this));
+
+    // Set up terminal width for InputBuffer (for multi-line wrapping)
+    this.inputBuffer.setTerminalWidth(this.terminalAdapter.cols);
+
+    // Handle terminal resize to update InputBuffer width and redraw input
+    this.terminalAdapter.onResize((cols) => {
+      this.handleResize(cols);
+    });
 
     // Set up drag and drop (store cleanup function for destroy)
     this.dragDropCleanup = setupDragAndDrop(container, (files) => {
@@ -655,11 +684,86 @@ export class DuckDBTerminal implements TerminalInterface {
    */
   private showPrompt(): void {
     const promptText = this.state === 'collecting' ? this.continuationPrompt : this.prompt;
-    this.inputBuffer.setPromptLength(promptText.length);
+    // Use visibleLength to handle any escape codes that might be in the prompt
+    this.inputBuffer.setPromptLength(vt100.visibleLength(promptText));
     this.write(vt100.colorize(promptText, vt100.FG_GREEN));
     if (this.state !== 'collecting') {
       this.setState('idle');
     }
+  }
+
+  /**
+   * Handles terminal resize events.
+   *
+   * Updates the InputBuffer with the new terminal width and redraws the
+   * current input line to ensure proper visual alignment after resize.
+   *
+   * @param cols - The new terminal width in columns
+   */
+  private handleResize(cols: number): void {
+    const oldWidth = this.inputBuffer.getTerminalWidth();
+
+    // Only process if width actually changed and we have content
+    const content = this.inputBuffer.getContent();
+    if (cols === oldWidth || content.length === 0 || this.state === 'executing') {
+      this.inputBuffer.setTerminalWidth(cols);
+      return;
+    }
+
+    // Calculate old cursor and end positions BEFORE updating width
+    const oldCursorPos = this.inputBuffer.getCursorPosition();
+    const oldEndPos = this.inputBuffer.getEndPosition();
+
+    // Update the terminal width
+    this.inputBuffer.setTerminalWidth(cols);
+
+    // Redraw the current input line
+    this.redrawInputLine(oldCursorPos, oldEndPos);
+  }
+
+  /**
+   * Redraws the current input line from scratch.
+   *
+   * After a terminal resize, Ghostty re-wraps content and the cursor position
+   * becomes unpredictable. The safest approach is to:
+   * 1. Print a newline to ensure we're on a fresh line
+   * 2. Redraw the prompt and content from scratch
+   *
+   * This may result in the old (garbled) content remaining visible above,
+   * but the current input will be correctly displayed and functional.
+   *
+   * @param _oldCursorPos - The cursor position before the change (unused, kept for API stability)
+   * @param _oldEndPos - The end position before the change (unused, kept for API stability)
+   */
+  private redrawInputLine(
+    _oldCursorPos: { row: number; col: number },
+    _oldEndPos: { row: number; col: number }
+  ): void {
+    const content = this.inputBuffer.getContent();
+    const newCursorPos = this.inputBuffer.getCursorPosition();
+    const newEndPos = this.inputBuffer.getEndPosition();
+
+    let output = '';
+
+    // Start fresh on a new line - this ensures we don't corrupt previous output
+    // and gives us a known starting position
+    output += '\r\n';
+
+    // Write the prompt
+    const promptText = this.state === 'collecting' ? this.continuationPrompt : this.prompt;
+    output += vt100.colorize(promptText, vt100.FG_GREEN);
+
+    // Write the content (with highlighting if enabled)
+    const highlighted = this.syntaxHighlighting ? highlightSQL(content) : content;
+    output += highlighted;
+
+    // Move cursor to correct position (based on NEW positions after resize)
+    if (newEndPos.row > newCursorPos.row) {
+      output += vt100.cursorUp(newEndPos.row - newCursorPos.row);
+    }
+    output += vt100.cursorColumn(newCursorPos.col + 1);
+
+    this.write(output);
   }
 
   /**

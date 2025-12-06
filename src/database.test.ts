@@ -162,18 +162,193 @@ describe('Database', () => {
     });
 
     it('should return table names', async () => {
+      // First query: get databases (single database case)
       mockQuery.mockResolvedValueOnce({
-        schema: { fields: [{ name: 'table_name' }] },
+        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
+        numRows: 1,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation(() => j === 0 ? 'memory' : true),
+        })),
+      });
+      // Second query: get all tables
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
         numRows: 2,
-        getChildAt: vi.fn().mockReturnValue({
-          get: vi.fn().mockImplementation((i: number) => ['users', 'products'][i]),
-        }),
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', 'main', 'users'],
+              ['memory', 'main', 'products'],
+            ];
+            return data[i][j];
+          }),
+        })),
       });
 
       await db.init();
       const tables = await db.getTables();
 
       expect(tables).toEqual(['users', 'products']);
+    });
+
+    it('should return qualified table names only for attached databases', async () => {
+      // First query: get databases (multiple databases)
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
+        numRows: 2,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', true],
+              ['mydb', false],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+      // Second query: get all tables
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
+        numRows: 3,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', 'main', 'users'],
+              ['mydb', 'main', 'orders'],
+              ['mydb', 'main', 'products'],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+
+      await db.init();
+      const tables = await db.getTables();
+
+      // memory tables don't need prefix, attached db tables get "dbname.tablename"
+      expect(tables).toEqual([
+        'users',
+        'mydb.orders',
+        'mydb.products',
+      ]);
+    });
+
+    it('should include schema name when not main', async () => {
+      // First query: get databases (single database)
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
+        numRows: 1,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation(() => j === 0 ? 'memory' : true),
+        })),
+      });
+      // Second query: get all tables including non-main schema
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
+        numRows: 3,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', 'main', 'users'],
+              ['memory', 'main', 'products'],
+              ['memory', 'analytics', 'reports'],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+
+      await db.init();
+      const tables = await db.getTables();
+
+      // main schema tables don't need prefix, other schemas get "schema.tablename"
+      expect(tables).toEqual([
+        'users',
+        'products',
+        'analytics.reports',
+      ]);
+    });
+
+    it('should handle attached database with non-main schema', async () => {
+      // First query: get databases (multiple databases)
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
+        numRows: 2,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', true],
+              ['mydb', false],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+      // Second query: get all tables
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
+        numRows: 3,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', 'main', 'users'],
+              ['mydb', 'main', 'orders'],
+              ['mydb', 'analytics', 'reports'],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+
+      await db.init();
+      const tables = await db.getTables();
+
+      // Full qualification for attached db with non-main schema
+      expect(tables).toEqual([
+        'users',
+        'mydb.orders',
+        'mydb.analytics.reports',
+      ]);
+    });
+
+    it('should show database prefix when only attached database has tables', async () => {
+      // First query: get databases (memory + attached)
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
+        numRows: 2,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['memory', true],
+              ['aws_iam', false],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+      // Second query: get all tables (only from attached db)
+      mockQuery.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
+        numRows: 2,
+        getChildAt: vi.fn().mockImplementation((j: number) => ({
+          get: vi.fn().mockImplementation((i: number) => {
+            const data = [
+              ['aws_iam', 'main', 'actions'],
+              ['aws_iam', 'main', 'services'],
+            ];
+            return data[i][j];
+          }),
+        })),
+      });
+
+      await db.init();
+      const tables = await db.getTables();
+
+      // Attached db tables get prefix even when memory has no tables
+      expect(tables).toEqual([
+        'aws_iam.actions',
+        'aws_iam.services',
+      ]);
     });
   });
 
