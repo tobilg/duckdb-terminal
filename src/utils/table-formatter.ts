@@ -67,7 +67,82 @@ function truncate(str: string, maxWidth: number): string {
 }
 
 /**
- * Format a value for display
+ * Convert BigInt to Number if within safe integer range, otherwise to string.
+ * JavaScript's Number.MAX_SAFE_INTEGER is 2^53 - 1 (9007199254740991).
+ */
+function bigIntToSafe(value: bigint): number | string {
+  if (value >= Number.MIN_SAFE_INTEGER && value <= Number.MAX_SAFE_INTEGER) {
+    return Number(value);
+  }
+  return value.toString();
+}
+
+/**
+ * Format an interval object (from DuckDB INTERVAL type).
+ */
+function formatInterval(interval: { months?: number; days?: number; micros?: bigint }): string {
+  const parts: string[] = [];
+  if (interval.months) {
+    const years = Math.floor(interval.months / 12);
+    const months = interval.months % 12;
+    if (years) parts.push(`${years} year${years !== 1 ? 's' : ''}`);
+    if (months) parts.push(`${months} month${months !== 1 ? 's' : ''}`);
+  }
+  if (interval.days) {
+    parts.push(`${interval.days} day${interval.days !== 1 ? 's' : ''}`);
+  }
+  if (interval.micros) {
+    const totalMicros = typeof interval.micros === 'bigint' ? Number(interval.micros) : interval.micros;
+    const hours = Math.floor(totalMicros / 3600000000);
+    const minutes = Math.floor((totalMicros % 3600000000) / 60000000);
+    const seconds = (totalMicros % 60000000) / 1000000;
+    if (hours || minutes || seconds) {
+      parts.push(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${seconds.toFixed(6).padStart(9, '0')}`);
+    }
+  }
+  return parts.length ? parts.join(' ') : '00:00:00';
+}
+
+/**
+ * Check if value is a DuckDB interval object.
+ */
+function isInterval(value: unknown): value is { months?: number; days?: number; micros?: bigint } {
+  if (typeof value !== 'object' || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return 'months' in obj || 'days' in obj || 'micros' in obj;
+}
+
+/**
+ * JSON replacer that handles special DuckDB types.
+ * - BigInt: converts to Number when safe, string otherwise
+ * - Date: converts to ISO string
+ * - Map: converts to object
+ * - Uint8Array (BLOB): converts to hex string
+ */
+function jsonSafeReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === 'bigint') {
+    return bigIntToSafe(value);
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (value instanceof Map) {
+    return Object.fromEntries(value);
+  }
+  if (value instanceof Uint8Array) {
+    return '\\x' + Array.from(value).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  return value;
+}
+
+/**
+ * Format a value for display.
+ * Handles special DuckDB types:
+ * - BigInt: converts to Number when safe, string otherwise
+ * - Date: converts to ISO string
+ * - Map: converts to {key: value, ...} format
+ * - Uint8Array (BLOB): converts to hex string
+ * - Interval: formats as human-readable duration
  */
 function formatValue(value: unknown, nullValue: string): string {
   if (value === null || value === undefined) {
@@ -80,16 +155,28 @@ function formatValue(value: unknown, nullValue: string): string {
     return value ? 'true' : 'false';
   }
   if (typeof value === 'bigint') {
-    return value.toString();
+    return String(bigIntToSafe(value));
   }
   if (value instanceof Date) {
     return value.toISOString();
   }
+  if (value instanceof Map) {
+    const entries = Array.from(value.entries()).map(
+      ([k, v]) => `${formatValue(k, nullValue)}: ${formatValue(v, nullValue)}`
+    );
+    return '{' + entries.join(', ') + '}';
+  }
+  if (value instanceof Uint8Array) {
+    return '\\x' + Array.from(value).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
   if (Array.isArray(value)) {
     return '[' + value.map((v) => formatValue(v, nullValue)).join(', ') + ']';
   }
+  if (isInterval(value)) {
+    return formatInterval(value);
+  }
   if (typeof value === 'object') {
-    return JSON.stringify(value);
+    return JSON.stringify(value, jsonSafeReplacer);
   }
   return String(value);
 }
@@ -196,46 +283,17 @@ export function formatTSV(columns: string[], rows: unknown[][]): string {
 }
 
 /**
- * Convert a value to a JSON-safe representation.
- * Handles BigInt and other non-serializable types.
- */
-function toJSONSafe(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  if (typeof value === 'bigint') {
-    // Convert BigInt to number if safe, otherwise to string
-    if (value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)) {
-      return Number(value);
-    }
-    return value.toString();
-  }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (Array.isArray(value)) {
-    return value.map(toJSONSafe);
-  }
-  if (typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value)) {
-      result[key] = toJSONSafe(val);
-    }
-    return result;
-  }
-  return value;
-}
-
-/**
- * Format query results as JSON
+ * Format query results as JSON.
+ * Uses jsonSafeReplacer to handle BigInt values that JSON.stringify
+ * cannot serialize natively.
  */
 export function formatJSON(columns: string[], rows: unknown[][]): string {
   const objects = rows.map((row) => {
     const obj: Record<string, unknown> = {};
     columns.forEach((col, i) => {
-      obj[col] = toJSONSafe(row[i]);
+      obj[col] = row[i] ?? null;
     });
     return obj;
   });
-  return JSON.stringify(objects, null, 2);
+  return JSON.stringify(objects, jsonSafeReplacer, 2);
 }

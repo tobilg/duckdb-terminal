@@ -124,6 +124,64 @@ function saveThemeName(name: string): void {
   }
 }
 
+// Calculate responsive font size based on viewport width
+function getResponsiveFontSize(): number {
+  const width = window.innerWidth;
+  if (width <= 480) return 12;
+  if (width <= 768) return 13;
+  return 14;
+}
+
+// Set up mobile action bar button handlers
+function setupMobileActions(terminal: Awaited<ReturnType<typeof createTerminal>>): void {
+  const keyboardBtn = document.getElementById('action-keyboard');
+  const copyBtn = document.getElementById('action-copy');
+  const clearBtn = document.getElementById('action-clear');
+  const helpBtn = document.getElementById('action-help');
+  const filesBtn = document.getElementById('action-files');
+
+  // Open keyboard - this is the primary action for mobile users
+  keyboardBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    (terminal as any).terminalAdapter?.focus();
+  });
+
+  // Copy last result to clipboard
+  copyBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await (terminal as any).copyLastResult?.();
+    (terminal as any).terminalAdapter?.focus();
+  });
+
+  // Clear terminal
+  clearBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    terminal.clear();
+    (terminal as any).terminalAdapter?.focus();
+  });
+
+  // Show help
+  helpBtn?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    // Execute .help command by writing it to the terminal
+    terminal.writeln('');
+    await terminal.executeSQL('.help;').catch(() => {
+      // .help is a command, not SQL - execute it differently
+    });
+    // Simulate typing .help and pressing enter
+    (terminal as any).terminalAdapter?.write('.help\r');
+    (terminal as any).terminalAdapter?.focus();
+  });
+
+  // Open file picker
+  filesBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // Simulate typing .open and pressing enter
+    (terminal as any).terminalAdapter?.write('.open\r');
+    (terminal as any).terminalAdapter?.focus();
+  });
+}
+
 async function main() {
   const container = document.getElementById('terminal-container');
   if (!container) {
@@ -147,12 +205,12 @@ async function main() {
   }
 
   try {
-    // Create and start the terminal
+    // Create and start the terminal with responsive font size
     const terminal = await createTerminal({
       container,
       theme: savedTheme,
       welcomeMessage: true,
-      fontSize: 14,
+      fontSize: getResponsiveFontSize(),
     });
 
     // Set up theme dropdown
@@ -175,6 +233,9 @@ async function main() {
     container.addEventListener('click', () => {
       (terminal as any).terminalAdapter?.focus();
     });
+
+    // Set up mobile action buttons
+    setupMobileActions(terminal);
   } catch (error) {
     console.error('Failed to initialize terminal:', error);
     // Use textContent to prevent XSS from error messages

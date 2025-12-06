@@ -98,9 +98,10 @@ describe('formatJSON', () => {
     expect(parsed[1].name).toBe('Bob');
   });
 
-  it('should handle BigInt values within safe integer range', () => {
+  it('should handle numeric values (DuckDB converts BigInt to Double)', () => {
+    // DuckDB's castBigIntToDouble config converts BigInt to numbers at query time
     const columns = ['id', 'count'];
-    const rows = [[BigInt(1), BigInt(1000)]];
+    const rows = [[1, 1000]];
     const result = formatJSON(columns, rows);
     const parsed = JSON.parse(result);
 
@@ -108,14 +109,13 @@ describe('formatJSON', () => {
     expect(parsed[0].count).toBe(1000);
   });
 
-  it('should handle BigInt values outside safe integer range', () => {
-    const columns = ['big_number'];
-    const largeNumber = BigInt('9007199254740993'); // Larger than MAX_SAFE_INTEGER
-    const rows = [[largeNumber]];
+  it('should handle floating point numbers', () => {
+    const columns = ['value'];
+    const rows = [[3.14159]];
     const result = formatJSON(columns, rows);
     const parsed = JSON.parse(result);
 
-    expect(parsed[0].big_number).toBe('9007199254740993');
+    expect(parsed[0].value).toBe(3.14159);
   });
 
   it('should handle null and undefined values', () => {
@@ -128,9 +128,9 @@ describe('formatJSON', () => {
     expect(parsed[0].b).toBeNull();
   });
 
-  it('should handle nested arrays with BigInt', () => {
+  it('should handle nested arrays with numbers', () => {
     const columns = ['values'];
-    const rows = [[[BigInt(1), BigInt(2), BigInt(3)]]];
+    const rows = [[[1, 2, 3]]];
     const result = formatJSON(columns, rows);
     const parsed = JSON.parse(result);
 

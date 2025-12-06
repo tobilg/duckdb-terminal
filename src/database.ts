@@ -121,15 +121,25 @@ export class Database {
     await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
 
+    // Note: We intentionally do NOT use castBigIntToDouble here.
+    // While it would simplify JSON serialization, it corrupts array values
+    // (e.g., range(10) returns garbage like [5e-324, 1e-323, ...]).
+    // Instead, BigInt is handled in table-formatter.ts via toString().
+    const queryConfig: duckdb.DuckDBQueryConfig = {
+      castDecimalToDouble: true,
+    };
+
     // Open database
     if (this.options.storage === 'opfs' && this.options.databasePath) {
       await this.db.open({
         path: this.options.databasePath,
         accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
+        query: queryConfig,
       });
     } else {
       await this.db.open({
         path: ':memory:',
+        query: queryConfig,
       });
     }
 

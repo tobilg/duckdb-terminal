@@ -82,6 +82,7 @@ export class TerminalAdapter {
   private container: HTMLElement | null = null;
   private options: TerminalOptions = {};
   private resizeObserver: ResizeObserver | null = null;
+  private mobileInput: HTMLTextAreaElement | null = null;
 
   /**
    * Initializes the Ghostty terminal and mounts it to the container.
@@ -183,6 +184,170 @@ export class TerminalAdapter {
     this.terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
       this.resizeHandler?.(cols, rows);
     });
+
+    // Set up mobile keyboard input helper
+    this.setupMobileInput();
+  }
+
+  /**
+   * Sets up mobile-specific functionality: touch scrolling and keyboard input.
+   * @internal
+   */
+  private setupMobileInput(): void {
+    if (!this.container) return;
+
+    // Only set up on touch devices
+    if (!this.isTouchDevice()) return;
+
+    // Set up touch scrolling on the container
+    this.setupTouchScrolling();
+
+    // Set up mobile keyboard input
+    this.setupMobileKeyboard();
+  }
+
+  /**
+   * Creates a hidden textarea for mobile keyboard input.
+   * Appended to document.body to avoid interfering with terminal touch events.
+   * @internal
+   */
+  private setupMobileKeyboard(): void {
+    // Remove existing mobile input if present
+    this.mobileInput?.remove();
+
+    // Create textarea for mobile keyboard - append to body, not container
+    const input = document.createElement('textarea');
+    input.className = 'mobile-keyboard-input';
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocorrect', 'off');
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('enterkeyhint', 'send');
+    input.setAttribute('aria-label', 'Terminal input');
+
+    // Position fixed at bottom of screen, tiny but not zero-sized
+    // iOS requires non-zero size for keyboard to appear
+    input.style.cssText = `
+      position: fixed;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      font-size: 16px;
+      border: none;
+      outline: none;
+      resize: none;
+      background: transparent;
+      color: transparent;
+      z-index: -1;
+    `;
+
+    // Handle input from mobile keyboard
+    input.addEventListener('input', () => {
+      const value = input.value;
+      if (value && this.dataHandler) {
+        this.dataHandler(value);
+      }
+      // Clear immediately to prevent accumulation
+      input.value = '';
+    });
+
+    // Handle special keys (Enter, Backspace, etc.)
+    input.addEventListener('keydown', (e) => {
+      // Let the input event handle regular characters
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.dataHandler?.('\r');
+        input.value = '';
+        // Dismiss virtual keyboard after sending command
+        input.blur();
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        this.dataHandler?.('\x7f');
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        this.dataHandler?.('\t');
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.dataHandler?.('\x1b[A');
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        this.dataHandler?.('\x1b[B');
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        this.dataHandler?.('\x1b[D');
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        this.dataHandler?.('\x1b[C');
+      }
+    });
+
+    // Append to body, not container - this is crucial!
+    document.body.appendChild(input);
+    this.mobileInput = input;
+  }
+
+  /**
+   * Sets up touch-based scrolling for the terminal.
+   * Translates touch gestures into scroll commands.
+   * @internal
+   */
+  private setupTouchScrolling(): void {
+    if (!this.container) return;
+
+    let touchStartY = 0;
+    let lastTouchY = 0;
+    let isTouchScrolling = false;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+        lastTouchY = touchStartY;
+        isTouchScrolling = false;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+
+      const currentY = e.touches[0].clientY;
+      const deltaY = lastTouchY - currentY;
+
+      // Only start scrolling if there's significant movement
+      if (!isTouchScrolling && Math.abs(currentY - touchStartY) > 10) {
+        isTouchScrolling = true;
+      }
+
+      if (isTouchScrolling) {
+        // Prevent default to stop page scrolling
+        e.preventDefault();
+
+        // Scroll the terminal - use scrollLines if available on terminal
+        // deltaY > 0 means scrolling up (finger moving up), show older content
+        // deltaY < 0 means scrolling down (finger moving down), show newer content
+        const lines = Math.round(deltaY / 20); // ~20px per line
+        if (lines !== 0 && this.terminal) {
+          // Use the terminal's scroll method
+          (this.terminal as any).scrollLines?.(lines);
+        }
+
+        lastTouchY = currentY;
+      }
+    };
+
+    const handleTouchEnd = () => {
+      isTouchScrolling = false;
+    };
+
+    this.container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    this.container.addEventListener('touchmove', handleTouchMove, { passive: false });
+    this.container.addEventListener('touchend', handleTouchEnd, { passive: true });
   }
 
   /**
@@ -289,6 +454,7 @@ export class TerminalAdapter {
 
   /**
    * Gives keyboard focus to the terminal.
+   * On mobile devices, focuses the hidden input to trigger the virtual keyboard.
    *
    * @example
    * ```typescript
@@ -296,7 +462,20 @@ export class TerminalAdapter {
    * ```
    */
   focus(): void {
-    this.terminal?.focus();
+    // On touch devices, focus the mobile input to trigger virtual keyboard
+    if (this.mobileInput && this.isTouchDevice()) {
+      this.mobileInput.focus();
+    } else {
+      this.terminal?.focus();
+    }
+  }
+
+  /**
+   * Checks if the current device supports touch input.
+   * @internal
+   */
+  private isTouchDevice(): boolean {
+    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   }
 
   /**
@@ -417,6 +596,8 @@ export class TerminalAdapter {
     window.removeEventListener('resize', this.handleResize);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.mobileInput?.remove();
+    this.mobileInput = null;
     this.terminal?.dispose();
     this.initialized = false;
     this.container = null;
