@@ -12,20 +12,16 @@ on:
 
 jobs:
   test:
-    name: Test on Node.js ${{ matrix.node-version }}
+    name: Test
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        node-version: [20, 22, 24]
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -40,8 +36,8 @@ jobs:
       - name: Build
         run: npm run build
 
-  deploy-demo:
-    name: Deploy demo to GitHub Pages
+  deploy-docs:
+    name: Deploy API docs to GitHub Pages
 
     needs: test
     if: github.ref == 'refs/heads/main'
@@ -61,7 +57,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -75,14 +71,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build demo
-        run: npm run build
+      - name: Generate API docs
+        run: npm run generate-docs
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
-          # Upload dist folder (contains the demo app)
-          path: 'dist'
+          path: 'docs'
 
       - name: Deploy to GitHub Pages
         id: deployment
@@ -92,10 +87,10 @@ jobs:
     name: Publish to npm
     needs: test
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event.base_ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
