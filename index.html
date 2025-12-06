@@ -150,6 +150,7 @@
         position: relative;
         color: #858585;
         transition: color 0.15s;
+        text-decoration: none;
       }
 
       .sidebar-item:hover {
@@ -776,7 +777,7 @@
   <body>
     <noscript>
       <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1e1e1e; color: #d4d4d4; font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 20px;">
-        <h1 style="font-size: 24px; margin-bottom: 16px;">JavaScript Required</h1>
+        <h1 style="font-size: 24px; margin-bottom: 16px;">DuckDB Terminal - Browser-based SQL Terminal</h1>
         <p style="max-width: 400px; line-height: 1.6; margin-bottom: 16px;">
           DuckDB Terminal requires JavaScript and WebAssembly to run SQL queries in your browser.
         </p>
@@ -793,6 +794,18 @@
           </div>
         </div>
         <div class="sidebar-bottom">
+          <a class="sidebar-item" href="https://tobilg.github.io/duckdb-terminal/" target="_blank" rel="noopener" title="TypeScript API Docs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>
+            </svg>
+          </a>
+          <a class="sidebar-item" href="https://sql-workbench.com" target="_blank" rel="noopener" title="SQL Workbench">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/>
+              <path d="m21 3-9 9"/>
+              <path d="M15 3h6v6"/>
+            </svg>
+          </a>
           <div class="sidebar-item" title="Settings">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3"></circle>
@@ -853,6 +866,18 @@
             <line x1="9" y1="15" x2="15" y2="15"></line>
           </svg>
         </button>
+        <a class="action-btn" href="https://tobilg.github.io/duckdb-terminal/" target="_blank" rel="noopener" title="TypeScript API Docs">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>
+          </svg>
+        </a>
+        <a class="action-btn" href="https://sql-workbench.com" target="_blank" rel="noopener" title="SQL Workbench">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/>
+            <path d="m21 3-9 9"/>
+            <path d="M15 3h6v6"/>
+          </svg>
+        </a>
       </div>
     </div>
     <script type="module" src="/src/index.ts"></script>
