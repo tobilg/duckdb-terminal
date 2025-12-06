@@ -7,8 +7,11 @@ on:
       - 'v*.*.*'
   pull_request:
     branches: [ main ]
-
   workflow_dispatch:
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
 
 jobs:
   test:
@@ -40,7 +43,7 @@ jobs:
     name: Deploy API docs to GitHub Pages
 
     needs: test
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
 
     runs-on: ubuntu-latest
 
@@ -117,5 +120,3 @@ jobs:
 
       - name: Publish to npm
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
