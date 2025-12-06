@@ -2,6 +2,12 @@
 
 A browser-based SQL Terminal for [DuckDB](https://duckdb.org/) powered by [Ghostty](https://ghostty.org/) terminal emulator.
 
+## Try it live
+The latest version is always deployed to [https://terminal.sql-workbench.com](https://terminal.sql-workbench.com).
+
+## API Docs
+The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-terminal](https://tobilg.github.io/duckdb-terminal/).
+
 ## Features
 
 - **Full SQL REPL** - Execute SQL queries with multi-line support
