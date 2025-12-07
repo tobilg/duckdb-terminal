@@ -25,6 +25,56 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 - **Query Timing** - Optional execution time display
 - **Persistent Storage** - Optional OPFS storage for data persistence
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                 Browser                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                          DuckDB Terminal                              │  │
+│  │                                                                       │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │                         Terminal                                │  │  │
+│  │  │                                                                 │  │  │
+│  │  │  - REPL (input, output, history)                                │  │  │
+│  │  │  - Command parsing (SQL, dot commands, multi-line)              │  │  │
+│  │  │  - Result formatting (table, CSV, TSV, JSON)                    │  │  │
+│  │  │  - Syntax highlighting                                          │  │  │
+│  │  └───────┬─────────────────────┬─────────────────────────┬─────────┘  │  │
+│  │          │                     │                         │            │  │
+│  │          ▼                     ▼                         │            │  │
+│  │  ┌───────────────┐   ┌─────────────────────┐             │            │  │
+│  │  │ Terminal      │   │      Database       │             │            │  │
+│  │  │ Adapter       │   │                     │             │            │  │
+│  │  │               │   │ - DuckDB WASM       │             │            │  │
+│  │  │ - Ghostty     │   │   wrapper           │             │            │  │
+│  │  │ - Themes      │   │ - Query execution   │             │            │  │
+│  │  │ - Keyboard    │   │ - Auto-complete     │             │            │  │
+│  │  │ - Mobile      │   │ - File loading      │             │            │  │
+│  │  └───────┬───────┘   └─────────┬───────────┘             │            │  │
+│  │          │                     │                         │            │  │
+│  └──────────┼─────────────────────┼─────────────────────────┼────────────┘  │
+│             │                     │                         │               │
+│             ▼                     ▼                         ▼               │
+│  ┌────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐   │
+│  │    Ghostty Web     │  │    DuckDB WASM      │  │     IndexedDB       │   │
+│  │    (npm package)   │  │    (Web Worker)     │  │  (Command History)  │   │
+│  │                    │  │                     │  │                     │   │
+│  │ - Canvas rendering │  │ - SQL engine        │  └─────────────────────┘   │
+│  │ - VT100 emulation  │  │ - Query processing  │                            │
+│  └────────────────────┘  └──────────┬──────────┘                            │
+│                                     │                                       │
+│                                     ▼                                       │
+│                          ┌─────────────────────┐                            │
+│                          │        OPFS         │                            │
+│                          │  (Database Storage) │                            │
+│                          └─────────────────────┘                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Installation
 
 ```bash
