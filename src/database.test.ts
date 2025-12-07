@@ -21,6 +21,7 @@ vi.mock('@duckdb/duckdb-wasm', () => ({
     pthreadWorker: 'mock-pthread',
   }),
   ConsoleLogger: vi.fn().mockImplementation(function() {}),
+  VoidLogger: vi.fn().mockImplementation(function() {}),
   AsyncDuckDB: vi.fn().mockImplementation(function() {
     return {
       instantiate: vi.fn().mockResolvedValue(undefined),
