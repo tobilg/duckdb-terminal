@@ -426,6 +426,8 @@ export class DuckDBTerminal implements TerminalInterface {
     if (this.config.welcomeMessage !== false) {
       // Hide cursor during loading to prevent Safari rendering artifacts
       this.write(vt100.CURSOR_HIDE);
+      // Add empty line at top to prevent first row clipping on mobile
+      this.writeln('');
       this.writeln(vt100.bold('DuckDB Terminal') + ` v${__APP_VERSION__}`);
       this.write(vt100.colorize('Loading DuckDB WASM...', vt100.FG_BRIGHT_BLACK));
     }
