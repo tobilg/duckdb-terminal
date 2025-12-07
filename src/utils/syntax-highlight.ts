@@ -1,243 +1,86 @@
 /**
- * SQL Syntax Highlighting
+ * SQL Syntax Highlighting using DuckDB's internal tokenizer
  */
 
 import * as vt100 from './vt100';
 
-// SQL Keywords
-const KEYWORDS = new Set([
-  'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-  'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
-  'CREATE', 'TABLE', 'DROP', 'ALTER', 'INDEX', 'VIEW', 'DATABASE', 'SCHEMA',
-  'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'ON', 'USING',
-  'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET',
-  'UNION', 'EXCEPT', 'INTERSECT', 'ALL', 'DISTINCT',
-  'AS', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
-  'BETWEEN', 'LIKE', 'ILIKE', 'EXISTS', 'ANY', 'SOME',
-  'TRUE', 'FALSE', 'ASC', 'DESC', 'NULLS', 'FIRST', 'LAST',
-  'WITH', 'RECURSIVE', 'OVER', 'PARTITION', 'WINDOW',
-  'CAST', 'COALESCE', 'NULLIF', 'EXTRACT', 'INTERVAL',
-  'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'UNIQUE', 'CHECK', 'DEFAULT',
-  'CONSTRAINT', 'CASCADE', 'RESTRICT', 'NO', 'ACTION',
-  'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION', 'SAVEPOINT',
-  'GRANT', 'REVOKE', 'PRIVILEGES', 'TO', 'PUBLIC',
-  'IF', 'REPLACE', 'TEMPORARY', 'TEMP', 'VIRTUAL', 'MATERIALIZED',
-]);
-
-// SQL Data Types
-const TYPES = new Set([
-  'INTEGER', 'INT', 'BIGINT', 'SMALLINT', 'TINYINT', 'HUGEINT',
-  'FLOAT', 'DOUBLE', 'REAL', 'DECIMAL', 'NUMERIC',
-  'VARCHAR', 'CHAR', 'TEXT', 'STRING', 'BLOB', 'BYTEA',
-  'BOOLEAN', 'BOOL', 'BIT',
-  'DATE', 'TIME', 'TIMESTAMP', 'DATETIME', 'TIMESTAMPTZ',
-  'UUID', 'JSON', 'ARRAY', 'LIST', 'MAP', 'STRUCT',
-]);
-
-// SQL Functions
-const FUNCTIONS = new Set([
-  'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'TOTAL',
-  'ABS', 'CEIL', 'CEILING', 'FLOOR', 'ROUND', 'TRUNC', 'TRUNCATE',
-  'SQRT', 'POWER', 'POW', 'EXP', 'LOG', 'LOG10', 'LOG2', 'LN',
-  'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN', 'ATAN2',
-  'LENGTH', 'CHAR_LENGTH', 'OCTET_LENGTH', 'BIT_LENGTH',
-  'UPPER', 'LOWER', 'INITCAP', 'TRIM', 'LTRIM', 'RTRIM',
-  'SUBSTR', 'SUBSTRING', 'LEFT', 'RIGHT', 'LPAD', 'RPAD',
-  'CONCAT', 'CONCAT_WS', 'REPLACE', 'REVERSE', 'REPEAT',
-  'POSITION', 'STRPOS', 'INSTR', 'LOCATE',
-  'SPLIT_PART', 'STRING_SPLIT', 'STRING_AGG', 'LISTAGG', 'ARRAY_AGG',
-  'NOW', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP',
-  'DATE_PART', 'DATE_TRUNC', 'DATE_DIFF', 'DATE_ADD', 'DATE_SUB',
-  'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND',
-  'COALESCE', 'NULLIF', 'IFNULL', 'NVL', 'IIF',
-  'GREATEST', 'LEAST', 'RANDOM', 'SETSEED',
-  'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'NTILE',
-  'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE',
-  'TYPEOF', 'TRY_CAST', 'UNNEST', 'GENERATE_SERIES', 'RANGE',
-  'READ_CSV', 'READ_PARQUET', 'READ_JSON',
-]);
-
-// Token types
-export type TokenType = 'keyword' | 'type' | 'function' | 'string' | 'number' | 'comment' | 'operator' | 'identifier' | 'whitespace';
-
-export interface Token {
-  type: TokenType;
-  value: string;
-  start: number;
-  end: number;
-}
-
 /**
- * Tokenize SQL string
+ * Map DuckDB token category to color
  */
-export function tokenize(sql: string): Token[] {
-  const tokens: Token[] = [];
-  let pos = 0;
-
-  while (pos < sql.length) {
-    const char = sql[pos];
-
-    // Whitespace
-    if (/\s/.test(char)) {
-      const start = pos;
-      while (pos < sql.length && /\s/.test(sql[pos])) {
-        pos++;
-      }
-      tokens.push({ type: 'whitespace', value: sql.slice(start, pos), start, end: pos });
-      continue;
-    }
-
-    // Single-line comment
-    if (sql.slice(pos, pos + 2) === '--') {
-      const start = pos;
-      while (pos < sql.length && sql[pos] !== '\n') {
-        pos++;
-      }
-      tokens.push({ type: 'comment', value: sql.slice(start, pos), start, end: pos });
-      continue;
-    }
-
-    // Multi-line comment
-    if (sql.slice(pos, pos + 2) === '/*') {
-      const start = pos;
-      pos += 2;
-      while (pos < sql.length - 1 && sql.slice(pos, pos + 2) !== '*/') {
-        pos++;
-      }
-      pos += 2;
-      tokens.push({ type: 'comment', value: sql.slice(start, pos), start, end: pos });
-      continue;
-    }
-
-    // String (single quote)
-    if (char === "'") {
-      const start = pos;
-      pos++;
-      while (pos < sql.length) {
-        if (sql[pos] === "'" && sql[pos + 1] === "'") {
-          pos += 2; // Escaped quote
-        } else if (sql[pos] === "'") {
-          pos++;
-          break;
-        } else {
-          pos++;
-        }
-      }
-      tokens.push({ type: 'string', value: sql.slice(start, pos), start, end: pos });
-      continue;
-    }
-
-    // String (double quote - identifier)
-    if (char === '"') {
-      const start = pos;
-      pos++;
-      while (pos < sql.length && sql[pos] !== '"') {
-        pos++;
-      }
-      pos++;
-      tokens.push({ type: 'identifier', value: sql.slice(start, pos), start, end: pos });
-      continue;
-    }
-
-    // Number
-    if (/[0-9]/.test(char) || (char === '.' && /[0-9]/.test(sql[pos + 1] || ''))) {
-      const start = pos;
-      // Integer part
-      while (pos < sql.length && /[0-9]/.test(sql[pos])) {
-        pos++;
-      }
-      // Decimal part
-      if (sql[pos] === '.' && /[0-9]/.test(sql[pos + 1] || '')) {
-        pos++;
-        while (pos < sql.length && /[0-9]/.test(sql[pos])) {
-          pos++;
-        }
-      }
-      // Exponent part
-      if (sql[pos] === 'e' || sql[pos] === 'E') {
-        pos++;
-        if (sql[pos] === '+' || sql[pos] === '-') {
-          pos++;
-        }
-        while (pos < sql.length && /[0-9]/.test(sql[pos])) {
-          pos++;
-        }
-      }
-      tokens.push({ type: 'number', value: sql.slice(start, pos), start, end: pos });
-      continue;
-    }
-
-    // Identifier or keyword
-    if (/[a-zA-Z_]/.test(char)) {
-      const start = pos;
-      while (pos < sql.length && /[a-zA-Z0-9_]/.test(sql[pos])) {
-        pos++;
-      }
-      const value = sql.slice(start, pos);
-      const upper = value.toUpperCase();
-
-      let type: TokenType = 'identifier';
-      if (KEYWORDS.has(upper)) {
-        type = 'keyword';
-      } else if (TYPES.has(upper)) {
-        type = 'type';
-      } else if (FUNCTIONS.has(upper)) {
-        type = 'function';
-      }
-
-      tokens.push({ type, value, start, end: pos });
-      continue;
-    }
-
-    // Operators and punctuation
-    const start = pos;
-    pos++;
-    tokens.push({ type: 'operator', value: sql.slice(start, pos), start, end: pos });
-  }
-
-  return tokens;
-}
-
-/**
- * Get color for token type
- */
-function getTokenColor(type: TokenType): string {
-  switch (type) {
-    case 'keyword':
+function getDuckDBTokenColor(category: string): string {
+  switch (category) {
+    case 'KEYWORD':
       return vt100.FG_BLUE;
-    case 'type':
-      return vt100.FG_CYAN;
-    case 'function':
-      return vt100.FG_YELLOW;
-    case 'string':
-      return vt100.FG_GREEN;
-    case 'number':
-      return vt100.FG_MAGENTA;
-    case 'comment':
-      return vt100.FG_BRIGHT_BLACK;
-    case 'operator':
+    case 'IDENTIFIER':
+      return ''; // No color for identifiers
+    case 'OPERATOR':
       return vt100.FG_WHITE;
-    case 'identifier':
-    case 'whitespace':
+    case 'NUMERIC_CONSTANT':
+      return vt100.FG_MAGENTA;
+    case 'STRING_CONSTANT':
+      return vt100.FG_GREEN;
+    case 'COMMENT':
+      return vt100.FG_BRIGHT_BLACK;
+    case 'ERROR':
+      return vt100.FG_RED;
     default:
       return '';
   }
 }
 
 /**
- * Highlight SQL string with ANSI colors
+ * Token from DuckDB's tokenize_sql() function
  */
-export function highlightSQL(sql: string): string {
-  const tokens = tokenize(sql);
-  let result = '';
+export interface DuckDBToken {
+  position: number;
+  category: string;
+}
 
-  for (const token of tokens) {
-    const color = getTokenColor(token.type);
-    if (color) {
-      result += color + token.value + vt100.RESET;
-    } else {
-      result += token.value;
+/**
+ * Highlight SQL string using DuckDB tokens from tokenize_sql()
+ *
+ * This function takes the SQL string and pre-fetched tokens from DuckDB's
+ * tokenize_sql() function and applies ANSI color codes.
+ *
+ * @param sql - The SQL string to highlight
+ * @param tokens - Array of tokens from DuckDB's tokenize_sql()
+ * @returns The SQL string with ANSI color codes applied
+ */
+export function highlightSQL(sql: string, tokens: DuckDBToken[]): string {
+  if (tokens.length === 0) {
+    return sql;
+  }
+
+  let result = '';
+  let lastEnd = 0;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const nextToken = tokens[i + 1];
+    const start = token.position;
+    const end = nextToken ? nextToken.position : sql.length;
+
+    // Add any text between last token and this one (shouldn't happen normally)
+    if (start > lastEnd) {
+      result += sql.slice(lastEnd, start);
     }
+
+    // Get the token text
+    const tokenText = sql.slice(start, end);
+    const color = getDuckDBTokenColor(token.category);
+
+    if (color) {
+      result += color + tokenText + vt100.RESET;
+    } else {
+      result += tokenText;
+    }
+
+    lastEnd = end;
+  }
+
+  // Add any remaining text
+  if (lastEnd < sql.length) {
+    result += sql.slice(lastEnd);
   }
 
   return result;
@@ -245,15 +88,89 @@ export function highlightSQL(sql: string): string {
 
 /**
  * Check if SQL appears complete (ends with semicolon outside of string/comment)
+ *
+ * This is a simple heuristic that checks if the SQL ends with a semicolon,
+ * accounting for strings, comments, and escaped quotes. For more robust
+ * SQL validation, use Database.isValidSQL() which uses DuckDB's parser.
  */
 export function isSQLComplete(sql: string): boolean {
   const trimmed = sql.trim();
   if (!trimmed) return false;
 
-  const tokens = tokenize(trimmed);
-  const lastNonWhitespace = [...tokens].reverse().find(t => t.type !== 'whitespace');
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let lastNonWhitespaceChar = '';
 
-  return lastNonWhitespace?.value === ';';
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    const nextChar = trimmed[i + 1];
+
+    // Handle line comment end
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false;
+      }
+      continue;
+    }
+
+    // Handle block comment
+    if (inBlockComment) {
+      if (char === '*' && nextChar === '/') {
+        inBlockComment = false;
+        i++; // Skip the '/'
+      }
+      continue;
+    }
+
+    // Handle single-quoted string
+    if (inSingleQuote) {
+      if (char === "'" && nextChar === "'") {
+        i++; // Skip escaped quote
+      } else if (char === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    // Handle double-quoted identifier
+    if (inDoubleQuote) {
+      if (char === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    // Check for comment starts
+    if (char === '-' && nextChar === '-') {
+      inLineComment = true;
+      i++; // Skip the second '-'
+      continue;
+    }
+
+    if (char === '/' && nextChar === '*') {
+      inBlockComment = true;
+      i++; // Skip the '*'
+      continue;
+    }
+
+    // Check for string starts
+    if (char === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    // Track non-whitespace characters
+    if (!/\s/.test(char)) {
+      lastNonWhitespaceChar = char;
+    }
+  }
+
+  return lastNonWhitespaceChar === ';';
 }
-
-// Note: debounce function moved to ./debounce.ts for reusability

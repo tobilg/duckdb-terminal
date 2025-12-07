@@ -13,7 +13,7 @@ import {
   type FileInfo,
 } from './utils/file-handler';
 import { copyToClipboard, readFromClipboard } from './utils/clipboard';
-import { highlightSQL } from './utils/syntax-highlight';
+import { highlightSQL, isSQLComplete } from './utils/syntax-highlight';
 import { debounce } from './utils/debounce';
 import { parseCommand } from './utils/command-parser';
 import { LinkProvider } from './utils/link-provider';
@@ -277,16 +277,22 @@ export class DuckDBTerminal implements TerminalInterface {
   // ==================== Syntax Highlighting ====================
 
   /**
-   * Returns SQL with syntax highlighting applied.
+   * Asynchronously highlights SQL using DuckDB's tokenizer.
    *
    * @param sql - The SQL string to highlight
-   * @returns The SQL with VT100 color codes applied, or the original SQL if highlighting is disabled
+   * @returns The highlighted SQL string with ANSI color codes
    */
-  private getHighlightedSQL(sql: string): string {
+  private async getHighlightedSQLAsync(sql: string): Promise<string> {
     if (!this.syntaxHighlighting) {
       return sql;
     }
-    return highlightSQL(sql);
+    if (this.database.isPoachedLoaded()) {
+      const tokens = await this.database.tokenizeSQL(sql);
+      if (tokens) {
+        return highlightSQL(sql, tokens);
+      }
+    }
+    return sql;
   }
 
   /**
@@ -295,8 +301,10 @@ export class DuckDBTerminal implements TerminalInterface {
    * This method clears the current line content and rewrites it with
    * color codes for SQL keywords, strings, numbers, etc. Called on
    * delimiter characters (space, semicolon, parentheses, comma) via debouncing.
+   *
+   * Uses DuckDB's internal parser via the poached extension for accurate tokenization.
    */
-  private redrawLineHighlighted(): void {
+  private async redrawLineHighlighted(): Promise<void> {
     if (!this.syntaxHighlighting) {
       return;
     }
@@ -306,9 +314,29 @@ export class DuckDBTerminal implements TerminalInterface {
       return;
     }
 
+    // Capture positions at start - content may change during async operation
     const cursorPosition = this.inputBuffer.getCursorPosition();
     const endPosition = this.inputBuffer.getEndPosition();
-    const highlighted = highlightSQL(content);
+
+    // Get highlighted content using DuckDB tokenizer
+    let highlighted: string;
+    if (this.database.isPoachedLoaded()) {
+      const tokens = await this.database.tokenizeSQL(content);
+      if (tokens) {
+        highlighted = highlightSQL(content, tokens);
+      } else {
+        // If tokenization fails, use plain content
+        highlighted = content;
+      }
+    } else {
+      // Extension not loaded, use plain content
+      highlighted = content;
+    }
+
+    // Check if content changed during async operation
+    if (content !== this.inputBuffer.getContent()) {
+      return; // Content changed, skip this redraw
+    }
 
     // Move cursor to start of input (row 0, after prompt)
     const startPosition = { row: 0, col: this.inputBuffer.getPromptLength() };
@@ -405,6 +433,9 @@ export class DuckDBTerminal implements TerminalInterface {
       this.database.init(),
       this.history.init(),
     ]);
+
+    // Load poached extension for syntax highlighting
+    await this.database.loadPoachedExtension();
 
     // Clear loading message and show full welcome
     if (this.config.welcomeMessage !== false) {
@@ -753,9 +784,8 @@ export class DuckDBTerminal implements TerminalInterface {
     const promptText = this.state === 'collecting' ? this.continuationPrompt : this.prompt;
     output += vt100.colorize(promptText, vt100.FG_GREEN);
 
-    // Write the content (with highlighting if enabled)
-    const highlighted = this.syntaxHighlighting ? highlightSQL(content) : content;
-    output += highlighted;
+    // Write the content (no highlighting in sync redraw - the debounced highlight will apply it)
+    output += content;
 
     // Move cursor to correct position (based on NEW positions after resize)
     if (newEndPos.row > newCursorPos.row) {
@@ -1020,9 +1050,31 @@ export class DuckDBTerminal implements TerminalInterface {
     // Collect SQL
     this.collectedSQL.push(input);
 
-    // Check if SQL is complete
+    // Check if SQL is complete (ends with semicolon outside of strings/comments)
     const fullSQL = this.collectedSQL.join('\n').trim();
-    if (fullSQL.endsWith(';')) {
+    const isComplete = isSQLComplete(fullSQL);
+
+    if (isComplete) {
+      // Add to history before validation (so user can recall and fix errors)
+      const flattenedSQL = fullSQL.replace(/\s*\n\s*/g, ' ').trim();
+      await this.history.add(flattenedSQL);
+
+      // Validate SQL before executing if poached extension is loaded
+      if (this.database.isPoachedLoaded()) {
+        const validation = await this.database.validateSQL(fullSQL);
+        if (validation && !validation.isValid && validation.error?.exceptionMessage) {
+          // There's a syntax error - show it to the user instead of executing
+          this.writeln('');
+          this.writeln(vt100.colorize('Error: ', vt100.FG_RED) + validation.error.exceptionMessage);
+          this.collectedSQL = [];
+          this.setState('idle');
+          this.inputBuffer.clear();
+          this.writeln('');
+          this.showPrompt();
+          return;
+        }
+      }
+
       this.writeln(''); // Add spacing before query output
       await this.executeSQL(fullSQL);
       this.collectedSQL = [];
@@ -1031,6 +1083,7 @@ export class DuckDBTerminal implements TerminalInterface {
         this.setState('idle');
       }
     } else {
+      // SQL doesn't end with semicolon - continue collecting for multi-line input
       this.setState('collecting');
     }
 
@@ -1038,7 +1091,7 @@ export class DuckDBTerminal implements TerminalInterface {
     // Don't show prompt if we're in pagination mode
     if (this.state !== 'paginating') {
       // Add spacing after SQL execution output, but not for continuation prompts
-      if (fullSQL.endsWith(';')) {
+      if (isComplete) {
         this.writeln('');
       }
       this.showPrompt();
@@ -1053,7 +1106,11 @@ export class DuckDBTerminal implements TerminalInterface {
     if (previous !== null) {
       this.write(this.inputBuffer.clearLine());
       this.inputBuffer.setContent(previous);
-      this.write(this.getHighlightedSQL(previous));
+      this.write(previous);
+      // Apply syntax highlighting immediately (no debounce needed for history recall)
+      if (this.syntaxHighlighting) {
+        this.redrawLineHighlighted();
+      }
     }
   }
 
@@ -1065,7 +1122,11 @@ export class DuckDBTerminal implements TerminalInterface {
     if (next !== null) {
       this.write(this.inputBuffer.clearLine());
       this.inputBuffer.setContent(next);
-      this.write(this.getHighlightedSQL(next));
+      this.write(next);
+      // Apply syntax highlighting immediately (no debounce needed for history recall)
+      if (this.syntaxHighlighting) {
+        this.redrawLineHighlighted();
+      }
     }
   }
 
@@ -1113,10 +1174,14 @@ export class DuckDBTerminal implements TerminalInterface {
         this.write(this.inputBuffer.replaceWordBeforeCursor(prefix));
       }
 
-      // Reshow prompt and current input with highlighting
+      // Reshow prompt and current input
       const promptText = this.state === 'collecting' ? this.continuationPrompt : this.prompt;
       this.write(vt100.colorize(promptText, vt100.FG_GREEN));
-      this.write(this.getHighlightedSQL(this.inputBuffer.getContent()));
+      this.write(this.inputBuffer.getContent());
+      // Apply syntax highlighting
+      if (this.syntaxHighlighting) {
+        this.redrawLineHighlighted();
+      }
     }
   }
 
@@ -1291,8 +1356,9 @@ export class DuckDBTerminal implements TerminalInterface {
     this.emit('queryStart', { sql });
 
     try {
-      // Add to history
-      await this.history.add(sql);
+      // Add to history (flatten multi-line SQL to single line for easier recall)
+      const flattenedSQL = sql.replace(/\s*\n\s*/g, ' ').trim();
+      await this.history.add(flattenedSQL);
 
       // Check if pagination is enabled and this is a SELECT query
       const trimmedSQL = sql.trim().replace(/;+$/, '');
@@ -1342,13 +1408,10 @@ export class DuckDBTerminal implements TerminalInterface {
       const message = error instanceof Error ? error.message : String(error);
       const duration = performance.now() - startTime;
 
-      // Display error with context - show the failed SQL for multi-line queries
-      this.writeln(vt100.colorize(`Error: ${message}`, vt100.FG_RED));
-      if (sql.includes('\n') || sql.length > 80) {
-        // For multi-line or long queries, show the failed query for context
-        const truncatedSQL = sql.length > 200 ? sql.substring(0, 200) + '...' : sql;
-        this.writeln(vt100.dim(`  Query: ${truncatedSQL.replace(/\n/g, ' ')}`));
-      }
+      // Extract just the error type and message, without the LINE/caret details
+      // DuckDB errors look like: "Binder Error: message\n\nLINE 1: ...\n        ^"
+      const cleanMessage = message.split('\n\n')[0] || message;
+      this.writeln(vt100.colorize('Error: ', vt100.FG_RED) + cleanMessage);
 
       // Emit queryEnd with error and error event
       this.emit('queryEnd', { sql, result: null, error: message, duration });
@@ -1535,20 +1598,20 @@ export class DuckDBTerminal implements TerminalInterface {
     }
   }
 
-  private cmdExamples(): void {
+  private async cmdExamples(): Promise<void> {
     this.writeln(vt100.bold('Example queries:'));
     this.writeln('');
     this.writeln(vt100.colorize("  -- Create a table", vt100.FG_BRIGHT_BLACK));
-    this.writeln('  ' + this.getHighlightedSQL("CREATE TABLE users (id INTEGER, name VARCHAR);"));
+    this.writeln('  ' + await this.getHighlightedSQLAsync("CREATE TABLE users (id INTEGER, name VARCHAR);"));
     this.writeln('');
     this.writeln(vt100.colorize("  -- Insert data", vt100.FG_BRIGHT_BLACK));
-    this.writeln('  ' + this.getHighlightedSQL("INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob');"));
+    this.writeln('  ' + await this.getHighlightedSQLAsync("INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob');"));
     this.writeln('');
     this.writeln(vt100.colorize("  -- Query data", vt100.FG_BRIGHT_BLACK));
-    this.writeln('  ' + this.getHighlightedSQL("SELECT * FROM users WHERE name LIKE 'A%';"));
+    this.writeln('  ' + await this.getHighlightedSQLAsync("SELECT * FROM users WHERE name LIKE 'A%';"));
     this.writeln('');
     this.writeln(vt100.colorize("  -- Use built-in functions", vt100.FG_BRIGHT_BLACK));
-    this.writeln('  ' + this.getHighlightedSQL("SELECT range(10), current_timestamp;"));
+    this.writeln('  ' + await this.getHighlightedSQLAsync("SELECT range(10), current_timestamp;"));
   }
 
   private async cmdFiles(args: string[]): Promise<void> {

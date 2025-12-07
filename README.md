@@ -122,13 +122,28 @@ interface TerminalConfig {
 |-----|--------|
 | `Enter` | Execute command/SQL |
 | `Tab` | Auto-complete |
+| `Backspace` | Delete character before cursor |
+| `Delete` | Delete character at cursor |
 | `↑` / `↓` | Navigate history |
 | `←` / `→` | Move cursor |
+| `Home` | Move to start of line |
+| `End` | Move to end of line |
 | `Ctrl+A` | Move to start of line |
 | `Ctrl+E` | Move to end of line |
-| `Ctrl+K` | Clear to end of line |
+| `Ctrl+K` | Clear from cursor to end of line |
 | `Ctrl+U` | Clear entire line |
+| `Ctrl+V` | Paste from clipboard |
 | `Ctrl+C` | Cancel current input |
+
+### Pagination Mode
+
+When viewing paginated results, the following keys are available:
+
+| Key | Action |
+|-----|--------|
+| `n` / `↓` / `Enter` | Next page |
+| `p` / `↑` | Previous page |
+| `q` / `Escape` / `Ctrl+C` | Quit pagination |
 
 ## Example Usage
 

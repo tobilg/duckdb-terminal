@@ -44,6 +44,10 @@ vi.mock('./database', () => ({
       getCompletions: vi.fn().mockResolvedValue([]),
       registerFile: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
+      loadPoachedExtension: vi.fn().mockResolvedValue(false),
+      isPoachedLoaded: vi.fn().mockReturnValue(false),
+      tokenizeSQL: vi.fn().mockResolvedValue(null),
+      validateSQL: vi.fn().mockResolvedValue(undefined),
     };
   }),
 }));

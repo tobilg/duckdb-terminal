@@ -62,12 +62,37 @@ export interface DatabaseOptions {
  * const result = await db.executeQuery("SELECT * FROM read_csv('data.csv');");
  * ```
  */
+/**
+ * Token from DuckDB's tokenize_sql() function
+ */
+export interface SQLToken {
+  /** Byte position in the SQL string */
+  position: number;
+  /** Token category (KEYWORD, IDENTIFIER, OPERATOR, etc.) */
+  category: string;
+}
+
+/**
+ * SQL error information from DuckDB's sql_error_message() function
+ */
+export interface SQLError {
+  /** Type of exception (e.g., "Parser", "Binder") */
+  exceptionType: string;
+  /** The error message */
+  exceptionMessage: string;
+  /** Position in the SQL string where the error occurred */
+  position: string;
+  /** Additional error subtype information */
+  errorSubtype: string;
+}
+
 export class Database {
   private db: duckdb.AsyncDuckDB | null = null;
   private conn: duckdb.AsyncDuckDBConnection | null = null;
   private worker: Worker | null = null;
   private initialized = false;
   private options: DatabaseOptions;
+  private poachedLoaded = false;
 
   constructor(options: DatabaseOptions = {}) {
     this.options = {
@@ -552,6 +577,143 @@ export class Database {
    */
   isReady(): boolean {
     return this.initialized && this.conn !== null;
+  }
+
+  /**
+   * Loads the poached extension for SQL tokenization.
+   *
+   * The poached extension provides tokenize_sql() which uses DuckDB's internal
+   * parser for accurate SQL syntax highlighting.
+   *
+   * @returns A promise that resolves to true if loaded successfully, false otherwise
+   */
+  async loadPoachedExtension(): Promise<boolean> {
+    if (this.poachedLoaded) {
+      return true;
+    }
+
+    if (!this.conn) {
+      return false;
+    }
+
+    try {
+      await this.executeQuery('INSTALL poached FROM community');
+      await this.executeQuery('LOAD poached');
+      this.poachedLoaded = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Checks if the poached extension is loaded.
+   *
+   * @returns True if the poached extension is available
+   */
+  isPoachedLoaded(): boolean {
+    return this.poachedLoaded;
+  }
+
+  /**
+   * Tokenizes SQL using DuckDB's internal parser via the poached extension.
+   *
+   * Returns token positions and categories for syntax highlighting.
+   * Categories include: KEYWORD, IDENTIFIER, OPERATOR, NUMERIC_CONSTANT,
+   * STRING_CONSTANT, COMMENT, ERROR
+   *
+   * @param sql - The SQL string to tokenize
+   * @returns A promise that resolves to an array of tokens, or null if tokenization fails
+   *
+   * @example
+   * ```typescript
+   * const tokens = await db.tokenizeSQL('SELECT * FROM users');
+   * // [
+   * //   { position: 0, category: 'KEYWORD' },      // SELECT
+   * //   { position: 7, category: 'OPERATOR' },     // *
+   * //   { position: 9, category: 'KEYWORD' },      // FROM
+   * //   { position: 14, category: 'IDENTIFIER' }   // users
+   * // ]
+   * ```
+   */
+  async tokenizeSQL(sql: string): Promise<SQLToken[] | null> {
+    if (!this.conn || !this.poachedLoaded) {
+      return null;
+    }
+
+    try {
+      // Escape single quotes in SQL for the query
+      const escapedSQL = sql.replace(/'/g, "''");
+      const result = await this.executeQuery(
+        `SELECT byte_position, category FROM tokenize_sql('${escapedSQL}')`
+      );
+
+      return result.rows.map((row) => ({
+        position: Number(row[0]),
+        category: String(row[1]),
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Validates SQL and returns error information if invalid.
+   *
+   * This combines `is_valid_sql()` and `sql_error_message()` in a single query
+   * for efficiency. Returns validation result and error details in one call.
+   *
+   * @param sql - The SQL string to validate
+   * @returns A promise that resolves to an object with `isValid` boolean and
+   *          optional `error` with details, or undefined if extension unavailable
+   *
+   * @example
+   * ```typescript
+   * const result = await db.validateSQL('SELECT * FROM users WHERE');
+   * if (result && !result.isValid) {
+   *   console.log(result.error?.exceptionMessage); // "syntax error at end of input"
+   * }
+   * ```
+   */
+  async validateSQL(sql: string): Promise<{ isValid: boolean; error?: SQLError } | undefined> {
+    if (!this.conn || !this.poachedLoaded) {
+      return undefined;
+    }
+
+    try {
+      // Escape single quotes in SQL for the query
+      const escapedSQL = sql.replace(/'/g, "''");
+      const result = await this.executeQuery(
+        `SELECT is_valid_sql('${escapedSQL}'), sql_error_message('${escapedSQL}')::json`
+      );
+
+      const isValid = result.rows[0]?.[0] === true;
+      const jsonStr = result.rows[0]?.[1];
+
+      if (isValid) {
+        return { isValid: true };
+      }
+
+      // Parse error details if available
+      if (jsonStr) {
+        const parsed = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        if (parsed.exception_message || parsed.exception_type) {
+          return {
+            isValid: false,
+            error: {
+              exceptionType: parsed.exception_type || '',
+              exceptionMessage: parsed.exception_message || '',
+              position: parsed.position || '',
+              errorSubtype: parsed.error_subtype || '',
+            },
+          };
+        }
+      }
+
+      return { isValid: false };
+    } catch {
+      return undefined;
+    }
   }
 
   /**

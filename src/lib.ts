@@ -131,6 +131,7 @@ export type { TerminalConfig, TerminalInterface, Theme, ThemeColors, TerminalEve
 export { DuckDBTerminal } from './terminal';
 export { TerminalAdapter } from './terminal-adapter';
 export { Database } from './database';
+export type { SQLToken, SQLError } from './database';
 export { HistoryStore } from './utils/history';
 export { InputBuffer } from './utils/input-buffer';
 
@@ -144,7 +145,8 @@ export { darkTheme, lightTheme, getTheme, getSavedTheme, saveTheme } from './the
 // Export utilities
 export { formatTable, formatCSV, formatTSV, formatJSON } from './utils/table-formatter';
 export { copyToClipboard, readFromClipboard, isClipboardAvailable } from './utils/clipboard';
-export { highlightSQL, tokenize, isSQLComplete } from './utils/syntax-highlight';
+export { highlightSQL, isSQLComplete } from './utils/syntax-highlight';
+export type { DuckDBToken } from './utils/syntax-highlight';
 export { LinkProvider, linkifyText, containsURL, extractURLs, isValidURL } from './utils/link-provider';
 
 // Export VT100 utilities individually
