@@ -140,7 +140,7 @@ export class Database {
     );
 
     this.worker = new Worker(workerUrl);
-    const logger = new duckdb.ConsoleLogger();
+    const logger = new duckdb.VoidLogger();
     this.db = new duckdb.AsyncDuckDB(logger, this.worker);
 
     await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);

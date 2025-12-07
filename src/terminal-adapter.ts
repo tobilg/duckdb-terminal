@@ -185,8 +185,86 @@ export class TerminalAdapter {
       this.resizeHandler?.(cols, rows);
     });
 
+    // Set up Safari clipboard workaround
+    // Safari requires clipboard operations to happen synchronously within a user gesture
+    this.setupSafariClipboardWorkaround();
+
     // Set up mobile keyboard input helper
     this.setupMobileInput();
+  }
+
+  /**
+   * Sets up a workaround for Safari's clipboard restrictions.
+   *
+   * Safari requires clipboard operations to happen synchronously within a user gesture.
+   * The async Clipboard API loses the gesture context after an await, causing copy to fail.
+   * This workaround intercepts Cmd+C and uses the synchronous execCommand method.
+   *
+   * @internal
+   */
+  private setupSafariClipboardWorkaround(): void {
+    if (!this.terminal) return;
+
+    // Use attachCustomKeyEventHandler to intercept Cmd+C
+    (this.terminal as any).attachCustomKeyEventHandler?.((event: KeyboardEvent) => {
+      // Only handle Cmd+C (Mac) - Ctrl+C should still send interrupt
+      if (event.metaKey && event.code === 'KeyC' && event.type === 'keydown') {
+        // Check if there's a selection in the terminal
+        const selection = (this.terminal as any).getSelection?.() as string | undefined;
+        if (selection && selection.length > 0) {
+          // Copy using synchronous execCommand (works in Safari)
+          this.copyToClipboardSync(selection);
+          return true; // Prevent default handling
+        }
+      }
+      return false; // Let other keys pass through
+    });
+  }
+
+  /**
+   * Copies text to clipboard using synchronous methods that work in Safari.
+   *
+   * @internal
+   * @param text - The text to copy to clipboard
+   */
+  private copyToClipboardSync(text: string): void {
+    // Create a temporary textarea for the copy operation
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    textarea.style.opacity = '0';
+
+    document.body.appendChild(textarea);
+
+    const previouslyFocused = document.activeElement as HTMLElement;
+
+    try {
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+
+      // execCommand is synchronous and works in Safari within a user gesture
+      const success = document.execCommand('copy');
+
+      if (!success) {
+        // Fallback to ClipboardItem API (also Safari-compatible when called synchronously)
+        if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+          const blob = new Blob([text], { type: 'text/plain' });
+          const clipboardItem = new ClipboardItem({ 'text/plain': blob });
+          navigator.clipboard.write([clipboardItem]).catch(() => {
+            // Silent fail - user can try again
+          });
+        }
+      }
+    } finally {
+      document.body.removeChild(textarea);
+      // Restore focus to the terminal
+      if (previouslyFocused) {
+        previouslyFocused.focus();
+      }
+    }
   }
 
   /**

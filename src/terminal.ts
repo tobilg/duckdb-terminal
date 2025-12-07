@@ -424,8 +424,10 @@ export class DuckDBTerminal implements TerminalInterface {
 
     // Show header with loading indicator
     if (this.config.welcomeMessage !== false) {
+      // Hide cursor during loading to prevent Safari rendering artifacts
+      this.write(vt100.CURSOR_HIDE);
       this.writeln(vt100.bold('DuckDB Terminal') + ` v${__APP_VERSION__}`);
-      this.write(vt100.dim('Loading DuckDB WASM...'));
+      this.write(vt100.colorize('Loading DuckDB WASM...', vt100.FG_BRIGHT_BLACK));
     }
 
     // Initialize database and history in parallel
@@ -439,9 +441,10 @@ export class DuckDBTerminal implements TerminalInterface {
 
     // Clear loading message and show full welcome
     if (this.config.welcomeMessage !== false) {
-      // Clear the "Loading DuckDB WASM..." line and rewrite
+      // Show cursor again and clear the "Loading DuckDB WASM..." line
+      this.write(vt100.CURSOR_SHOW);
       this.write('\r' + vt100.CLEAR_TO_END);
-      this.writeln(vt100.dim('Powered by DuckDB WASM and Ghostty'));
+      this.writeln(vt100.colorize('Powered by DuckDB WASM and Ghostty', vt100.FG_BRIGHT_BLACK));
       this.writeln('');
       this.writeln('Type ' + vt100.colorize('.help', vt100.FG_CYAN) + ' for available commands');
       this.writeln('Enter SQL statements ending with ' + vt100.colorize(';', vt100.FG_YELLOW));
