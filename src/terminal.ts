@@ -1615,7 +1615,8 @@ export class DuckDBTerminal implements TerminalInterface {
   private cmdHelp(): void {
     this.writeln(vt100.bold('Available commands:'));
     this.writeln('');
-    for (const cmd of this.commands.values()) {
+    const sortedCommands = [...this.commands.values()].sort((a, b) => a.name.localeCompare(b.name));
+    for (const cmd of sortedCommands) {
       const usage = cmd.usage ? `  ${vt100.dim(cmd.usage)}` : '';
       this.writeln(`  ${vt100.colorize(cmd.name, vt100.FG_CYAN)}  ${cmd.description}${usage}`);
     }
