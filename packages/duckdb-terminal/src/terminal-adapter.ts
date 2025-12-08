@@ -1,5 +1,5 @@
 import { Ghostty, Terminal, FitAddon } from 'ghostty-web';
-import type { Theme } from '@/types';
+import type { Theme } from './types';
 
 // Injected by Vite at build time from node_modules/ghostty-web/package.json
 declare const __GHOSTTY_VERSION__: string;

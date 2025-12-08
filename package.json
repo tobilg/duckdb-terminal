@@ -1,59 +1,22 @@
 {
-  "name": "duckdb-terminal",
-  "version": "0.3.0",
-  "description": "DuckDB SQL Terminal powered by Ghostty terminal emulator",
-  "type": "module",
-  "main": "./dist/duckdb-terminal.umd.cjs",
-  "module": "./dist/duckdb-terminal.js",
-  "types": "./dist/lib.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/lib.d.ts",
-      "import": "./dist/duckdb-terminal.js",
-      "require": "./dist/duckdb-terminal.umd.cjs"
-    }
-  },
-  "files": [
-    "dist"
+  "name": "duckdb-terminal-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
   ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "build:lib": "tsc && vite build --mode library",
-    "generate-docs": "typedoc",
-    "preview": "vite preview",
-    "test": "vitest",
-    "test:ui": "vitest --ui",
-    "test:coverage": "vitest --coverage",
-    "lint": "eslint src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit",
-    "deploy": "npm run build && wrangler pages deploy website"
-  },
-  "keywords": [
-    "duckdb",
-    "sql",
-    "shell",
-    "terminal",
-    "ghostty",
-    "wasm",
-    "repl"
-  ],
-  "author": "TobiLG <github@tobilg.com>",
-  "license": "MIT",
-  "peerDependencies": {
-    "@duckdb/duckdb-wasm": "^1.31.1-dev31.0",
-    "ghostty-web": "^0.3.0"
+    "dev": "npm run dev -w @duckdb-terminal/website",
+    "build": "npm run build -w duckdb-terminal && npm run build -w @duckdb-terminal/website",
+    "build:lib": "npm run build -w duckdb-terminal",
+    "build:website": "npm run build -w @duckdb-terminal/website",
+    "test": "npm run test -w duckdb-terminal",
+    "test:ui": "npm run test:ui -w duckdb-terminal",
+    "test:coverage": "npm run test:coverage -w duckdb-terminal",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "generate-docs": "npm run generate-docs -w duckdb-terminal",
+    "deploy": "npm run build:website && wrangler pages deploy packages/website/dist"
   },
   "devDependencies": {
-    "@duckdb/duckdb-wasm": "^1.31.1-dev31.0",
-    "@types/node": "^20.10.0",
-    "ghostty-web": "^0.3.0",
-    "jsdom": "^27.2.0",
-    "typedoc": "^0.28.15",
-    "typescript": "^5.9.3",
-    "uplot": "^1.6.32",
-    "vite": "^7.2.6",
-    "vite-plugin-dts": "^4.5.4",
-    "vitest": "^4.0.15"
+    "typescript": "^5.9.3"
   }
 }

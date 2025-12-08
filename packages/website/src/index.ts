@@ -2,9 +2,8 @@
  * DuckDB Terminal - Demo Application Entry Point
  */
 
-import { createTerminal } from './lib';
-import { darkTheme, lightTheme } from './themes';
-import type { Theme, ThemeColors } from './types';
+import { createTerminal, darkTheme, lightTheme } from 'duckdb-terminal';
+import type { Theme, ThemeColors } from 'duckdb-terminal';
 
 // Custom theme: Tokyo Night
 const tokyoNightColors: ThemeColors = {

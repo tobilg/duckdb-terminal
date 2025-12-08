@@ -76,7 +76,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: 'docs'
+          path: 'packages/duckdb-terminal/docs'
 
       - name: Deploy to GitHub Pages
         id: deployment
@@ -119,4 +119,6 @@ jobs:
         run: npm run build:lib
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: npm publish -w duckdb-terminal --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

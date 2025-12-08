@@ -1,4 +1,4 @@
-import type { Theme, ThemeColors } from '@/types';
+import type { Theme, ThemeColors } from '../types';
 
 /**
  * Dark theme colors

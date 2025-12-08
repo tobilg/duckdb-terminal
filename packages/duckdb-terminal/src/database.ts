@@ -1,5 +1,5 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
-import type { QueryResult, CompletionSuggestion } from '@/types';
+import type { QueryResult, CompletionSuggestion } from './types';
 
 /**
  * Configuration options for the Database class.

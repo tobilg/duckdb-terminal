@@ -1,12 +1,12 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPoints": ["src/lib.ts"],
+  "entryPoints": ["src/index.ts"],
   "out": "docs",
   "name": "DuckDB Terminal",
   "includeVersion": true,
   "excludePrivate": false,
   "excludeInternal": false,
-  "readme": "README.md",
+  "readme": "../../README.md",
   "navigationLinks": {
     "DuckDB Terminal": "https://terminal.sql-workbench.com",
     "SQL Workbench": "https://sql-workbench.com"

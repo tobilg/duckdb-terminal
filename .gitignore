@@ -4,8 +4,9 @@ node_modules/
 # Build output
 dist/
 build/
-docs/
-website/
+/docs/
+packages/*/dist/
+packages/duckdb-terminal/docs/
 
 # IDE
 .idea/
