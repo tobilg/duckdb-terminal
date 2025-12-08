@@ -204,8 +204,9 @@ export class Database {
     const result = await this.conn.query(sql);
     const duration = performance.now() - startTime;
 
-    // Get column names
+    // Get column names and types
     const columns = result.schema.fields.map((field) => field.name);
+    const columnTypes = result.schema.fields.map((field) => String(field.type));
 
     // Get rows
     const rows: unknown[][] = [];
@@ -223,6 +224,7 @@ export class Database {
 
     return {
       columns,
+      columnTypes,
       rows,
       rowCount: numRows,
       duration,

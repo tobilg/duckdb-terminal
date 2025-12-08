@@ -24,6 +24,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 - **Dot Commands** - Terminal commands like `.help`, `.tables`, `.schema`
 - **Query Timing** - Optional execution time display
 - **Persistent Storage** - Optional OPFS storage for data persistence
+- **Interactive Charts** - Visualize query results with auto-detected chart types (line, bar, scatter, histogram)
 
 ## Architecture
 
@@ -142,6 +143,9 @@ interface TerminalConfig {
 
   // Scrollback buffer size in bytes (default: 10485760 = 10MB)
   scrollback?: number;
+
+  // Enable interactive charts feature (default: false)
+  enableCharts?: boolean;
 }
 ```
 
@@ -151,11 +155,13 @@ interface TerminalConfig {
 |---------|-------------|
 | `.help` | Show available commands |
 | `.clear` | Clear the terminal |
+| `.clearhistory` | Clear command history |
 | `.tables` | List all tables |
 | `.schema <table>` | Show table schema |
 | `.timer on\|off` | Toggle query timing |
 | `.mode table\|csv\|tsv\|json` | Set output format |
 | `.copy` | Copy last query results to clipboard |
+| `.download [filename]` | Download last result as file (format based on mode) |
 | `.pagesize <n>` | Set pagination size (0 to disable) |
 | `.theme dark\|light` | Switch color theme (clears screen) |
 | `.highlight on\|off` | Toggle syntax highlighting |
@@ -165,6 +171,107 @@ interface TerminalConfig {
 | `.prompt [primary [cont]]` | Get or set the command prompt |
 | `.examples` | Show example queries |
 | `.reset` | Reset database and all settings to defaults |
+| `.chart [options]` | Show interactive chart of last query result |
+
+## Charts
+
+The terminal includes an interactive charting feature powered by [uPlot](https://github.com/leeoniya/uPlot). Charts are displayed as an overlay on top of the terminal and support hover tooltips, legends, and PNG export.
+
+> **Note:** Charts must be enabled in the configuration with `enableCharts: true`. The uPlot library (~50KB) is loaded from CDN on first use.
+
+### Basic Usage
+
+```sql
+-- Run a query, then visualize it
+SELECT date, revenue, cost FROM sales;
+.chart
+```
+
+### Chart Type Auto-Detection
+
+The chart type is automatically detected based on your data:
+
+| Data Pattern | Chart Type | Example |
+|--------------|------------|---------|
+| Temporal + Numeric columns | **Line** | `DATE` + `revenue` → time series |
+| Categorical + Numeric columns | **Bar** | `category` + `total` → bar chart |
+| Two Numeric columns only | **Scatter** | `x_value` + `y_value` → scatter plot |
+| Single Numeric column | **Histogram** | `value` → distribution histogram |
+| Multiple Numeric columns | **Line** | `col1`, `col2`, `col3` → multi-series line |
+
+### Command Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `type=TYPE` | Force chart type: `line`, `bar`, `scatter`, `histogram` | `.chart type=bar` |
+| `x=COLUMN` | Specify X-axis column | `.chart x=date` |
+| `y=COLUMN` | Specify Y-axis column(s), comma-separated | `.chart y=revenue,cost` |
+| `export` | Export chart as PNG | `.chart export` |
+
+### Examples
+
+```sql
+-- Line chart: Time series with multiple series
+SELECT DATE '2024-01-01' + INTERVAL (i) DAY AS date,
+       100 + random() * 50 AS revenue,
+       80 + random() * 30 AS cost
+FROM generate_series(0, 11) AS t(i);
+.chart
+
+-- Bar chart: Categorical data
+SELECT category, SUM(amount) as total
+FROM (VALUES
+    ('Electronics', 1500),
+    ('Clothing', 800),
+    ('Food', 1200),
+    ('Books', 400),
+    ('Toys', 600)
+) AS t(category, amount)
+GROUP BY category;
+.chart
+
+-- Scatter plot: Two numeric columns
+SELECT random() * 100 AS x_value,
+       random() * 100 AS y_value
+FROM generate_series(1, 50);
+.chart
+
+-- Histogram: Single numeric column distribution
+SELECT (random() * 100)::INTEGER AS value
+FROM generate_series(1, 200);
+.chart
+
+-- Multi-series bar chart
+SELECT region,
+       SUM(CASE WHEN product = 'A' THEN sales ELSE 0 END) as product_a,
+       SUM(CASE WHEN product = 'B' THEN sales ELSE 0 END) as product_b
+FROM (VALUES
+    ('North', 'A', 120), ('North', 'B', 90),
+    ('South', 'A', 80), ('South', 'B', 150),
+    ('East', 'A', 200), ('East', 'B', 110),
+    ('West', 'A', 95), ('West', 'B', 130)
+) AS t(region, product, sales)
+GROUP BY region;
+.chart
+
+-- Line chart with numeric X axis (sine/cosine waves)
+SELECT i AS x,
+       sin(i * 0.5) * 50 + 50 AS sine_wave,
+       cos(i * 0.5) * 50 + 50 AS cosine_wave
+FROM generate_series(0, 20) AS t(i);
+.chart
+
+-- Force specific chart type and axes
+.chart type=line x=date y=revenue,cost
+```
+
+### Chart Interaction
+
+| Key | Action |
+|-----|--------|
+| Hover | Show tooltip with values at cursor position |
+| `ESC` | Close the chart |
+| `Ctrl+S` / `Cmd+S` | Export chart as PNG |
 
 ## Keyboard Shortcuts
 

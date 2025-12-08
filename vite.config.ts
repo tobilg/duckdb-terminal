@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import dts from 'vite-plugin-dts';
 import pkg from './package.json';
 import ghosttyPkg from './node_modules/ghostty-web/package.json';
+import uplotPkg from './node_modules/uplot/package.json';
 
 export default defineConfig(({ mode }) => {
   const isLibrary = mode === 'library';
@@ -11,6 +12,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
       __GHOSTTY_VERSION__: JSON.stringify(ghosttyPkg.version),
+      __UPLOT_VERSION__: JSON.stringify(uplotPkg.version),
     },
     plugins: [
       // Only generate declaration files for library builds

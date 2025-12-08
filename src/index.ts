@@ -211,6 +211,7 @@ async function main() {
       theme: savedTheme,
       welcomeMessage: true,
       fontSize: getResponsiveFontSize(),
+      enableCharts: true,
     });
 
     // Set up theme dropdown

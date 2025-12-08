@@ -10,6 +10,7 @@ import {
   getFileExtension,
   getFileInfo,
   setupDragAndDrop,
+  downloadFile,
   type FileInfo,
 } from './utils/file-handler';
 import { copyToClipboard, readFromClipboard } from './utils/clipboard';
@@ -17,6 +18,7 @@ import { highlightSQL, isSQLComplete } from './utils/syntax-highlight';
 import { debounce } from './utils/debounce';
 import { parseCommand } from './utils/command-parser';
 import { LinkProvider } from './utils/link-provider';
+import { ChartManager } from './charts';
 import * as vt100 from './utils/vt100';
 import type {
   TerminalConfig,
@@ -115,6 +117,7 @@ export class DuckDBTerminal implements TerminalInterface {
   private syntaxHighlighting: boolean = true;
   private lastQueryResult: QueryResult | null = null;
   private linkProvider: LinkProvider;
+  private chartManager: ChartManager | null = null;
 
   // Event emitter
   private eventListeners: Map<keyof TerminalEvents, Set<TerminalEventListener<any>>> = new Map();
@@ -489,6 +492,12 @@ export class DuckDBTerminal implements TerminalInterface {
       this.dragDropCleanup = null;
     }
 
+    // Clean up chart manager
+    if (this.chartManager) {
+      this.chartManager.destroy();
+      this.chartManager = null;
+    }
+
     // Clear event listeners
     this.eventListeners.clear();
 
@@ -678,6 +687,13 @@ export class DuckDBTerminal implements TerminalInterface {
       handler: async () => { await this.copyLastResult(); },
     });
 
+    this.commands.set('.download', {
+      name: '.download',
+      description: 'Download last result as file',
+      usage: '.download [filename]',
+      handler: (args) => this.cmdDownload(args),
+    });
+
     this.commands.set('.highlight', {
       name: '.highlight',
       description: 'Toggle syntax highlighting',
@@ -710,6 +726,19 @@ export class DuckDBTerminal implements TerminalInterface {
       description: 'Get or set the command prompt',
       usage: '.prompt [primary [continuation]]',
       handler: (args) => this.cmdPrompt(args),
+    });
+
+    this.commands.set('.chart', {
+      name: '.chart',
+      description: 'Show chart of last query result',
+      usage: '.chart [type=line|bar|scatter|histogram] [x=col] [y=col,...]',
+      handler: (args) => this.cmdChart(args),
+    });
+
+    this.commands.set('.clearhistory', {
+      name: '.clearhistory',
+      description: 'Clear command history',
+      handler: () => this.cmdClearHistory(),
     });
   }
 
@@ -1276,6 +1305,68 @@ export class DuckDBTerminal implements TerminalInterface {
   }
 
   /**
+   * Download last query result as a file in the current output format.
+   */
+  private cmdDownload(args: string[]): void {
+    if (!this.lastQueryResult) {
+      this.writeln(vt100.dim('No query result to download'));
+      return;
+    }
+
+    let content: string;
+    let extension: string;
+    let mimeType: string;
+
+    switch (this.outputMode) {
+      case 'csv':
+        content = formatCSV(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        extension = '.csv';
+        mimeType = 'text/csv';
+        break;
+      case 'tsv':
+        content = formatTSV(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        extension = '.tsv';
+        mimeType = 'text/tab-separated-values';
+        break;
+      case 'json':
+        content = formatJSON(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        extension = '.json';
+        mimeType = 'application/json';
+        break;
+      default:
+        content = formatTable(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        extension = '.txt';
+        mimeType = 'text/plain';
+    }
+
+    const filename = this.generateDownloadFilename(args[0], extension);
+    downloadFile(content, filename, mimeType);
+    this.writeln(vt100.colorize(`Downloaded: ${filename}`, vt100.FG_GREEN));
+  }
+
+  /**
+   * Generate a filename for download with timestamp or custom name.
+   */
+  private generateDownloadFilename(customName: string | undefined, extension: string): string {
+    if (customName) {
+      if (!customName.endsWith(extension)) {
+        return customName + extension;
+      }
+      return customName;
+    }
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
+    return `duckdb-result-${year}-${month}-${day}-${hours}${minutes}${seconds}${extension}`;
+  }
+
+  /**
    * Executes a dot command (e.g., .help, .tables, .schema).
    *
    * Parses the command and arguments, looks up the handler, and executes it.
@@ -1828,6 +1919,46 @@ export class DuckDBTerminal implements TerminalInterface {
     }
   }
 
+  private async cmdClearHistory(): Promise<void> {
+    try {
+      await this.history.clear();
+      this.writeln(vt100.colorize('Command history cleared', vt100.FG_GREEN));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.writeln(vt100.colorize(`Error clearing history: ${message}`, vt100.FG_RED));
+    }
+  }
+
+  private async cmdChart(args: string[]): Promise<void> {
+    // Initialize chart manager on first use
+    if (!this.chartManager) {
+      const container = this.resolveContainer();
+      const theme = this.getCurrentThemeObject();
+      this.chartManager = new ChartManager(container, {
+        enabled: this.config.enableCharts ?? false,
+        themeMode: this.getTheme(),
+        themeColors: theme.colors,
+      });
+    }
+
+    // Build full command string from args
+    const commandInput = args.length > 0 ? `.chart ${args.join(' ')}` : '.chart';
+
+    // Execute chart command
+    const result = await this.chartManager.executeCommand(
+      commandInput,
+      this.lastQueryResult
+    );
+
+    if (result.success) {
+      if (result.message) {
+        this.writeln(vt100.colorize(result.message, vt100.FG_GREEN));
+      }
+    } else {
+      this.writeln(vt100.colorize(`Error: ${result.error}`, vt100.FG_RED));
+    }
+  }
+
   // ==================== TerminalInterface Implementation ====================
 
   /**
@@ -1937,6 +2068,11 @@ export class DuckDBTerminal implements TerminalInterface {
     // Emit themeChange event
     const newTheme = this.getCurrentThemeObject();
     this.emit('themeChange', { theme: newTheme, previous: previousTheme });
+
+    // Update chart manager theme
+    if (this.chartManager) {
+      this.chartManager.setTheme(this.getTheme(), newTheme.colors);
+    }
 
     // Update body class for page styling
     const isLight = this.currentThemeName === 'light' ||

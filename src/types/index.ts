@@ -83,6 +83,12 @@ export interface TerminalConfig {
    * @defaultValue 10485760 (10MB)
    */
   scrollback?: number;
+  /**
+   * Enable the charts feature (.chart command).
+   * When enabled, uPlot is loaded from CDN on first use.
+   * @defaultValue false
+   */
+  enableCharts?: boolean;
 }
 
 /**
@@ -211,6 +217,8 @@ export type TerminalState = 'idle' | 'collecting' | 'executing' | 'paginating';
 export interface QueryResult {
   /** Column names from the query result */
   columns: string[];
+  /** DuckDB column type names (e.g., 'INTEGER', 'VARCHAR', 'DATE') */
+  columnTypes?: string[];
   /** Row data as a 2D array */
   rows: unknown[][];
   /** Total number of rows returned */
