@@ -61,6 +61,7 @@ export default defineConfig(({ mode }) => {
           rollupOptions: {
             input: {
               main: resolve(__dirname, 'index.html'),
+              guide: resolve(__dirname, 'guide/index.html'),
             },
             // Externalize ghostty-web - load from CDN at runtime
             external: ['ghostty-web'],

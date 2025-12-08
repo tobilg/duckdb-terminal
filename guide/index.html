@@ -1,0 +1,1872 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>User Guide - DuckDB Terminal</title>
+    <meta name="description" content="User guide for DuckDB Terminal - Learn how to use terminal commands, keyboard shortcuts, charts, file loading, and more." />
+    <meta name="keywords" content="DuckDB, SQL, terminal, documentation, commands, keyboard shortcuts, charts, tutorial" />
+    <meta name="author" content="TobiLG" />
+    <link rel="canonical" href="https://terminal.sql-workbench.com/guide/" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="User Guide - DuckDB Terminal" />
+    <meta property="og:description" content="User guide for DuckDB Terminal - Learn how to use terminal commands, keyboard shortcuts, charts, file loading, and more." />
+    <meta property="og:url" content="https://terminal.sql-workbench.com/guide/" />
+    <meta property="og:image" content="https://terminal.sql-workbench.com/images/og.png" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="User Guide - DuckDB Terminal" />
+    <meta name="twitter:description" content="User guide for DuckDB Terminal - Learn how to use terminal commands, keyboard shortcuts, charts, file loading, and more." />
+    <meta name="twitter:image" content="https://terminal.sql-workbench.com/images/og.png" />
+
+    <!-- Additional meta -->
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#1e1e1e" />
+    <link rel="icon" type="image/svg+xml" href="/duck.svg" />
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+      }
+
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          Roboto, sans-serif;
+        background: #1e1e1e;
+        color: #d4d4d4;
+        line-height: 1.6;
+      }
+
+      #app {
+        display: flex;
+        flex-direction: row;
+        height: 100%;
+      }
+
+      /* ==================== App Sidebar (same as main page) ==================== */
+      .sidebar {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: #252526;
+        border-right: 1px solid #3c3c3c;
+        flex-shrink: 0;
+        width: 48px;
+      }
+
+      .sidebar-top {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        flex: 1;
+      }
+
+      .sidebar-bottom {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        padding-bottom: 8px;
+      }
+
+      .sidebar-item {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 48px;
+        height: 48px;
+        cursor: pointer;
+        position: relative;
+        color: #858585;
+        transition: color 0.15s;
+        text-decoration: none;
+      }
+
+      .sidebar-item:hover {
+        color: #ffffff;
+      }
+
+      .sidebar-item.active {
+        color: #ffffff;
+      }
+
+      .sidebar-item.active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: #ffffff;
+      }
+
+      .sidebar-item svg {
+        width: 24px;
+        height: 24px;
+      }
+
+      .sidebar-icon {
+        font-size: 22px;
+        line-height: 1;
+        user-select: none;
+      }
+
+      .sidebar-item[title]:hover::after {
+        content: attr(title);
+        position: absolute;
+        left: 52px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: #252526;
+        border: 1px solid #454545;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: nowrap;
+        color: #cccccc;
+        z-index: 1000;
+        pointer-events: none;
+      }
+
+      .theme-select {
+        background: transparent;
+        border: none;
+        color: #858585;
+        cursor: pointer;
+        font-size: 12px;
+        padding: 0;
+        width: 48px;
+        height: 48px;
+        text-align: center;
+        appearance: none;
+        -webkit-appearance: none;
+        transition: color 0.15s;
+      }
+
+      .theme-select:hover {
+        color: #ffffff;
+      }
+
+      .theme-select:focus {
+        outline: none;
+        color: #ffffff;
+      }
+
+      /* ==================== Guide Navigation Sidebar ==================== */
+      .guide-nav {
+        width: 220px;
+        background: #252526;
+        border-right: 1px solid #3c3c3c;
+        padding: 20px 0;
+        overflow-y: auto;
+        flex-shrink: 0;
+      }
+
+      .guide-nav-title {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #858585;
+        padding: 8px 20px;
+        margin-top: 12px;
+      }
+
+      .guide-nav-title:first-child {
+        margin-top: 0;
+      }
+
+      .guide-nav-link {
+        display: block;
+        padding: 6px 20px;
+        color: #d4d4d4;
+        text-decoration: none;
+        font-size: 14px;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .guide-nav-link:hover {
+        background: #2a2d2e;
+        color: #ffffff;
+      }
+
+      .guide-nav-link.active {
+        background: #37373d;
+        color: #ffffff;
+        border-left: 2px solid #007acc;
+        padding-left: 18px;
+      }
+
+      /* Mobile nav toggle */
+      .guide-nav-toggle {
+        display: none;
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        border: none;
+        background: #007acc;
+        color: #ffffff;
+        font-size: 24px;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        z-index: 200;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .guide-nav-toggle svg {
+        width: 24px;
+        height: 24px;
+      }
+
+      /* ==================== Guide Content ==================== */
+      .guide-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 40px 60px;
+        max-width: 900px;
+      }
+
+      .guide-content-wrapper {
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        justify-content: center;
+      }
+
+      .guide-section {
+        margin-bottom: 48px;
+        scroll-margin-top: 20px;
+      }
+
+      .guide-section:last-child {
+        margin-bottom: 100px;
+      }
+
+      h1 {
+        font-size: 32px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        color: #ffffff;
+      }
+
+      h2 {
+        font-size: 24px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        margin-top: 32px;
+        color: #ffffff;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #3c3c3c;
+      }
+
+      h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        margin-top: 24px;
+        color: #e0e0e0;
+      }
+
+      h4 {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 8px;
+        margin-top: 16px;
+        color: #cccccc;
+      }
+
+      p {
+        margin-bottom: 16px;
+      }
+
+      a {
+        color: #3b8eea;
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      ul, ol {
+        margin-bottom: 16px;
+        padding-left: 24px;
+      }
+
+      li {
+        margin-bottom: 8px;
+      }
+
+      code {
+        font-family: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+        background: #2d2d2d;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.9em;
+        color: #ce9178;
+      }
+
+      pre {
+        background: #1e1e1e;
+        border: 1px solid #3c3c3c;
+        border-radius: 6px;
+        padding: 0;
+        overflow-x: auto;
+        margin-bottom: 16px;
+      }
+
+      pre code {
+        background: #1e1e1e;
+        padding: 16px;
+        color: #d4d4d4;
+        display: block;
+        white-space: pre;
+        border-radius: 6px;
+      }
+
+      /* Syntax highlighting in code blocks */
+      .keyword { color: #569cd6; }
+      .string { color: #ce9178; }
+      .number { color: #b5cea8; }
+      .comment { color: #6a9955; }
+      .function { color: #dcdcaa; }
+      .operator { color: #d4d4d4; }
+
+      /* Tables */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 16px;
+        font-size: 14px;
+      }
+
+      th, td {
+        text-align: left;
+        padding: 10px 12px;
+        border: 1px solid #3c3c3c;
+      }
+
+      th {
+        background: #2d2d2d;
+        font-weight: 600;
+        color: #ffffff;
+      }
+
+      tr:hover {
+        background: #2a2d2e;
+      }
+
+      /* Keyboard shortcuts */
+      kbd {
+        display: inline-block;
+        padding: 3px 8px;
+        font-family: 'Fira Code', monospace;
+        font-size: 12px;
+        background: #2d2d2d;
+        border: 1px solid #454545;
+        border-radius: 4px;
+        box-shadow: 0 1px 0 #454545;
+        color: #d4d4d4;
+      }
+
+      /* Info boxes */
+      .info-box {
+        background: #2a2d2e;
+        border-left: 4px solid #007acc;
+        padding: 16px;
+        margin-bottom: 16px;
+        border-radius: 0 6px 6px 0;
+      }
+
+      .info-box.tip {
+        border-left-color: #0dbc79;
+      }
+
+      .info-box.warning {
+        border-left-color: #e5e510;
+      }
+
+      .info-box p:last-child {
+        margin-bottom: 0;
+      }
+
+      /* Hero section */
+      .hero {
+        margin-bottom: 48px;
+        padding-bottom: 32px;
+        border-bottom: 1px solid #3c3c3c;
+      }
+
+      .hero h1 {
+        font-size: 36px;
+        margin-bottom: 12px;
+      }
+
+      .hero p {
+        font-size: 18px;
+        color: #a0a0a0;
+        margin-bottom: 24px;
+      }
+
+      .hero-links {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .hero-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 20px;
+        background: #007acc;
+        color: #ffffff;
+        border-radius: 6px;
+        font-weight: 500;
+        transition: background 0.15s;
+      }
+
+      .hero-link:hover {
+        background: #0098ff;
+        text-decoration: none;
+      }
+
+      .hero-link.secondary {
+        background: #3c3c3c;
+      }
+
+      .hero-link.secondary:hover {
+        background: #4c4c4c;
+      }
+
+      /* Theme color swatches */
+      .theme-swatch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .theme-color {
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        border: 1px solid #454545;
+      }
+
+      /* ==================== Light Theme ==================== */
+      body.light {
+        background: #ffffff;
+        color: #1e1e1e;
+      }
+
+      body.light .sidebar {
+        background: #f3f3f3;
+        border-right-color: #e0e0e0;
+      }
+
+      body.light .sidebar-item {
+        color: #616161;
+      }
+
+      body.light .sidebar-item:hover {
+        color: #1e1e1e;
+      }
+
+      body.light .sidebar-item.active {
+        color: #1e1e1e;
+      }
+
+      body.light .sidebar-item.active::before {
+        background: #1e1e1e;
+      }
+
+      body.light .sidebar-item[title]:hover::after {
+        background: #f3f3f3;
+        border-color: #d4d4d4;
+        color: #1e1e1e;
+      }
+
+      body.light .theme-select {
+        color: #616161;
+      }
+
+      body.light .theme-select:hover,
+      body.light .theme-select:focus {
+        color: #1e1e1e;
+      }
+
+      body.light .guide-nav {
+        background: #f3f3f3;
+        border-right-color: #e0e0e0;
+      }
+
+      body.light .guide-nav-link {
+        color: #1e1e1e;
+      }
+
+      body.light .guide-nav-link:hover {
+        background: #e8e8e8;
+      }
+
+      body.light .guide-nav-link.active {
+        background: #d4d4d4;
+      }
+
+      body.light h1, body.light h2 {
+        color: #1e1e1e;
+      }
+
+      body.light h3 {
+        color: #333333;
+      }
+
+      body.light h2 {
+        border-bottom-color: #e0e0e0;
+      }
+
+      body.light code {
+        background: #f0f0f0;
+        color: #a31515;
+      }
+
+      body.light pre {
+        background: #1e1e1e;
+        border-color: #3c3c3c;
+      }
+
+      body.light pre code {
+        background: #1e1e1e;
+        color: #d4d4d4;
+      }
+
+      body.light pre .keyword { color: #569cd6; }
+      body.light pre .string { color: #ce9178; }
+      body.light pre .number { color: #b5cea8; }
+      body.light pre .comment { color: #6a9955; }
+      body.light pre .function { color: #dcdcaa; }
+      body.light pre .operator { color: #d4d4d4; }
+
+      body.light th, body.light td {
+        border-color: #e0e0e0;
+      }
+
+      body.light th {
+        background: #f0f0f0;
+        color: #1e1e1e;
+      }
+
+      body.light tr:hover {
+        background: #f5f5f5;
+      }
+
+      body.light kbd {
+        background: #f0f0f0;
+        border-color: #d4d4d4;
+        box-shadow: 0 1px 0 #d4d4d4;
+        color: #1e1e1e;
+      }
+
+      body.light .info-box {
+        background: #f5f5f5;
+      }
+
+      body.light .hero {
+        border-bottom-color: #e0e0e0;
+      }
+
+      body.light .hero p {
+        color: #666666;
+      }
+
+      body.light .hero-link.secondary {
+        background: #e0e0e0;
+        color: #1e1e1e;
+      }
+
+      body.light .hero-link.secondary:hover {
+        background: #d0d0d0;
+      }
+
+      /* ==================== Tokyo Night Theme ==================== */
+      body.tokyo-night {
+        background: #1a1b26;
+        color: #a9b1d6;
+      }
+
+      body.tokyo-night .sidebar {
+        background: #16161e;
+        border-right-color: #292e42;
+      }
+
+      body.tokyo-night .sidebar-item {
+        color: #565f89;
+      }
+
+      body.tokyo-night .sidebar-item:hover {
+        color: #c0caf5;
+      }
+
+      body.tokyo-night .sidebar-item.active {
+        color: #c0caf5;
+      }
+
+      body.tokyo-night .sidebar-item.active::before {
+        background: #7aa2f7;
+      }
+
+      body.tokyo-night .sidebar-item[title]:hover::after {
+        background: #16161e;
+        border-color: #292e42;
+        color: #a9b1d6;
+      }
+
+      body.tokyo-night .theme-select {
+        color: #565f89;
+      }
+
+      body.tokyo-night .theme-select:hover,
+      body.tokyo-night .theme-select:focus {
+        color: #c0caf5;
+      }
+
+      body.tokyo-night .guide-nav {
+        background: #16161e;
+        border-right-color: #292e42;
+      }
+
+      body.tokyo-night .guide-nav-link {
+        color: #a9b1d6;
+      }
+
+      body.tokyo-night .guide-nav-link:hover {
+        background: #1f2335;
+      }
+
+      body.tokyo-night .guide-nav-link.active {
+        background: #292e42;
+        border-left-color: #7aa2f7;
+      }
+
+      body.tokyo-night h1, body.tokyo-night h2 {
+        color: #c0caf5;
+      }
+
+      body.tokyo-night h2 {
+        border-bottom-color: #292e42;
+      }
+
+      body.tokyo-night code {
+        background: #24283b;
+        color: #9ece6a;
+      }
+
+      body.tokyo-night pre {
+        background: #1a1b26;
+        border-color: #292e42;
+      }
+
+      body.tokyo-night pre code {
+        background: #1a1b26;
+        color: #a9b1d6;
+      }
+
+      body.tokyo-night pre .keyword { color: #bb9af7; }
+      body.tokyo-night pre .string { color: #9ece6a; }
+      body.tokyo-night pre .number { color: #ff9e64; }
+      body.tokyo-night pre .comment { color: #565f89; }
+      body.tokyo-night pre .function { color: #7aa2f7; }
+      body.tokyo-night pre .operator { color: #89ddff; }
+
+      body.tokyo-night th, body.tokyo-night td {
+        border-color: #292e42;
+      }
+
+      body.tokyo-night th {
+        background: #24283b;
+      }
+
+      body.tokyo-night tr:hover {
+        background: #1f2335;
+      }
+
+      body.tokyo-night kbd {
+        background: #24283b;
+        border-color: #414868;
+        box-shadow: 0 1px 0 #414868;
+      }
+
+      body.tokyo-night .info-box {
+        background: #1f2335;
+        border-left-color: #7aa2f7;
+      }
+
+      body.tokyo-night .hero {
+        border-bottom-color: #292e42;
+      }
+
+      body.tokyo-night a {
+        color: #7aa2f7;
+      }
+
+      body.tokyo-night .hero-link {
+        background: #7aa2f7;
+        color: #1a1b26;
+      }
+
+      body.tokyo-night .hero-link:hover {
+        background: #89b4fa;
+        color: #1a1b26;
+      }
+
+      body.tokyo-night .hero-link.secondary {
+        background: #414868;
+      }
+
+      body.tokyo-night .hero-link.secondary:hover {
+        background: #565f89;
+      }
+
+      /* ==================== Dracula Theme ==================== */
+      body.dracula {
+        background: #282a36;
+        color: #f8f8f2;
+      }
+
+      body.dracula .sidebar {
+        background: #21222c;
+        border-right-color: #44475a;
+      }
+
+      body.dracula .sidebar-item {
+        color: #6272a4;
+      }
+
+      body.dracula .sidebar-item:hover {
+        color: #f8f8f2;
+      }
+
+      body.dracula .sidebar-item.active {
+        color: #f8f8f2;
+      }
+
+      body.dracula .sidebar-item.active::before {
+        background: #bd93f9;
+      }
+
+      body.dracula .sidebar-item[title]:hover::after {
+        background: #21222c;
+        border-color: #44475a;
+        color: #f8f8f2;
+      }
+
+      body.dracula .theme-select {
+        color: #6272a4;
+      }
+
+      body.dracula .theme-select:hover,
+      body.dracula .theme-select:focus {
+        color: #f8f8f2;
+      }
+
+      body.dracula .guide-nav {
+        background: #21222c;
+        border-right-color: #44475a;
+      }
+
+      body.dracula .guide-nav-link {
+        color: #f8f8f2;
+      }
+
+      body.dracula .guide-nav-link:hover {
+        background: #343746;
+      }
+
+      body.dracula .guide-nav-link.active {
+        background: #44475a;
+        border-left-color: #bd93f9;
+      }
+
+      body.dracula h1, body.dracula h2 {
+        color: #f8f8f2;
+      }
+
+      body.dracula h2 {
+        border-bottom-color: #44475a;
+      }
+
+      body.dracula code {
+        background: #343746;
+        color: #50fa7b;
+      }
+
+      body.dracula pre {
+        background: #282a36;
+        border-color: #44475a;
+      }
+
+      body.dracula pre code {
+        background: #282a36;
+        color: #f8f8f2;
+      }
+
+      body.dracula pre .keyword { color: #ff79c6; }
+      body.dracula pre .string { color: #f1fa8c; }
+      body.dracula pre .number { color: #bd93f9; }
+      body.dracula pre .comment { color: #6272a4; }
+      body.dracula pre .function { color: #50fa7b; }
+      body.dracula pre .operator { color: #ff79c6; }
+
+      body.dracula th, body.dracula td {
+        border-color: #44475a;
+      }
+
+      body.dracula th {
+        background: #343746;
+      }
+
+      body.dracula tr:hover {
+        background: #343746;
+      }
+
+      body.dracula kbd {
+        background: #343746;
+        border-color: #6272a4;
+        box-shadow: 0 1px 0 #6272a4;
+      }
+
+      body.dracula .info-box {
+        background: #343746;
+        border-left-color: #bd93f9;
+      }
+
+      body.dracula .hero {
+        border-bottom-color: #44475a;
+      }
+
+      body.dracula a {
+        color: #8be9fd;
+      }
+
+      body.dracula .hero-link {
+        background: #bd93f9;
+      }
+
+      body.dracula .hero-link:hover {
+        background: #caa9fa;
+      }
+
+      body.dracula .hero-link.secondary {
+        background: #44475a;
+      }
+
+      body.dracula .hero-link.secondary:hover {
+        background: #6272a4;
+      }
+
+      /* ==================== Solarized Dark Theme ==================== */
+      body.solarized-dark {
+        background: #002b36;
+        color: #839496;
+      }
+
+      body.solarized-dark .sidebar {
+        background: #073642;
+        border-right-color: #586e75;
+      }
+
+      body.solarized-dark .sidebar-item {
+        color: #586e75;
+      }
+
+      body.solarized-dark .sidebar-item:hover {
+        color: #93a1a1;
+      }
+
+      body.solarized-dark .sidebar-item.active {
+        color: #93a1a1;
+      }
+
+      body.solarized-dark .sidebar-item.active::before {
+        background: #268bd2;
+      }
+
+      body.solarized-dark .sidebar-item[title]:hover::after {
+        background: #073642;
+        border-color: #586e75;
+        color: #93a1a1;
+      }
+
+      body.solarized-dark .theme-select {
+        color: #586e75;
+      }
+
+      body.solarized-dark .theme-select:hover,
+      body.solarized-dark .theme-select:focus {
+        color: #93a1a1;
+      }
+
+      body.solarized-dark .guide-nav {
+        background: #073642;
+        border-right-color: #586e75;
+      }
+
+      body.solarized-dark .guide-nav-link {
+        color: #839496;
+      }
+
+      body.solarized-dark .guide-nav-link:hover {
+        background: #094959;
+      }
+
+      body.solarized-dark .guide-nav-link.active {
+        background: #0a5264;
+        border-left-color: #268bd2;
+      }
+
+      body.solarized-dark h1, body.solarized-dark h2 {
+        color: #93a1a1;
+      }
+
+      body.solarized-dark h2 {
+        border-bottom-color: #586e75;
+      }
+
+      body.solarized-dark code {
+        background: #073642;
+        color: #859900;
+      }
+
+      body.solarized-dark pre {
+        background: #002b36;
+        border-color: #586e75;
+      }
+
+      body.solarized-dark pre code {
+        background: #002b36;
+        color: #839496;
+      }
+
+      body.solarized-dark pre .keyword { color: #859900; }
+      body.solarized-dark pre .string { color: #2aa198; }
+      body.solarized-dark pre .number { color: #d33682; }
+      body.solarized-dark pre .comment { color: #586e75; }
+      body.solarized-dark pre .function { color: #268bd2; }
+      body.solarized-dark pre .operator { color: #93a1a1; }
+
+      body.solarized-dark th, body.solarized-dark td {
+        border-color: #586e75;
+      }
+
+      body.solarized-dark th {
+        background: #073642;
+      }
+
+      body.solarized-dark tr:hover {
+        background: #094959;
+      }
+
+      body.solarized-dark kbd {
+        background: #073642;
+        border-color: #586e75;
+        box-shadow: 0 1px 0 #586e75;
+      }
+
+      body.solarized-dark .info-box {
+        background: #073642;
+        border-left-color: #268bd2;
+      }
+
+      body.solarized-dark .hero {
+        border-bottom-color: #586e75;
+      }
+
+      body.solarized-dark a {
+        color: #268bd2;
+      }
+
+      body.solarized-dark .hero-link {
+        background: #268bd2;
+        color: #002b36;
+      }
+
+      body.solarized-dark .hero-link:hover {
+        background: #2aa198;
+        color: #002b36;
+      }
+
+      body.solarized-dark .hero-link.secondary {
+        background: #586e75;
+        color: #002b36;
+      }
+
+      body.solarized-dark .hero-link.secondary:hover {
+        background: #657b83;
+        color: #002b36;
+      }
+
+      /* ==================== Responsive: Tablet (768px and below) ==================== */
+      @media (max-width: 768px) {
+        .sidebar {
+          width: 40px;
+        }
+
+        .sidebar-item {
+          width: 40px;
+          height: 40px;
+        }
+
+        .sidebar-icon {
+          font-size: 18px;
+        }
+
+        .sidebar-item svg {
+          width: 20px;
+          height: 20px;
+        }
+
+        .sidebar-item[title]:hover::after {
+          display: none;
+        }
+
+        .guide-nav {
+          position: fixed;
+          left: 40px;
+          top: 0;
+          bottom: 0;
+          z-index: 100;
+          transform: translateX(-100%);
+          transition: transform 0.3s ease;
+          width: 240px;
+          box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .guide-nav.open {
+          transform: translateX(0);
+        }
+
+        .guide-nav-toggle {
+          display: flex;
+        }
+
+        .guide-content {
+          padding: 24px;
+        }
+
+        .hero h1 {
+          font-size: 28px;
+        }
+
+        h1 {
+          font-size: 26px;
+        }
+
+        h2 {
+          font-size: 20px;
+        }
+
+        table {
+          font-size: 13px;
+        }
+
+        th, td {
+          padding: 8px;
+        }
+      }
+
+      /* ==================== Responsive: Mobile (480px and below) ==================== */
+      @media (max-width: 480px) {
+        #app {
+          flex-direction: column;
+        }
+
+        .sidebar {
+          flex-direction: row;
+          width: 100%;
+          height: 44px;
+          border-right: none;
+          border-bottom: 1px solid #3c3c3c;
+          justify-content: space-between;
+          padding: 0 8px;
+          padding-left: env(safe-area-inset-left, 8px);
+          padding-right: env(safe-area-inset-right, 8px);
+        }
+
+        .sidebar-top,
+        .sidebar-bottom {
+          flex-direction: row;
+          width: auto;
+        }
+
+        .sidebar-bottom {
+          padding-bottom: 0;
+        }
+
+        .sidebar-item {
+          width: 44px;
+          height: 44px;
+        }
+
+        .sidebar-item.active::before {
+          top: auto;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          width: auto;
+          height: 2px;
+        }
+
+        .sidebar-icon {
+          font-size: 20px;
+        }
+
+        .sidebar-item svg {
+          width: 22px;
+          height: 22px;
+        }
+
+        .guide-nav {
+          left: 0;
+          top: 44px;
+          width: 100%;
+          max-height: 50vh;
+          box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .guide-content {
+          padding: 16px;
+          padding-bottom: env(safe-area-inset-bottom, 16px);
+        }
+
+        .guide-content-wrapper {
+          height: calc(100% - 44px);
+        }
+
+        .hero h1 {
+          font-size: 24px;
+        }
+
+        .hero p {
+          font-size: 16px;
+        }
+
+        .hero-links {
+          flex-direction: column;
+        }
+
+        h1 {
+          font-size: 22px;
+        }
+
+        h2 {
+          font-size: 18px;
+        }
+
+        pre {
+          padding: 12px;
+          font-size: 13px;
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+        }
+
+        .guide-nav-toggle {
+          bottom: 16px;
+          right: 16px;
+          width: 48px;
+          height: 48px;
+        }
+      }
+
+      /* Light theme sidebar border for mobile */
+      body.light .sidebar {
+        border-right-color: #e0e0e0;
+      }
+
+      @media (max-width: 480px) {
+        body.light .sidebar {
+          border-bottom-color: #e0e0e0;
+        }
+      }
+
+      /* Tokyo Night sidebar border for mobile */
+      @media (max-width: 480px) {
+        body.tokyo-night .sidebar {
+          border-bottom-color: #292e42;
+        }
+      }
+
+      /* Dracula sidebar border for mobile */
+      @media (max-width: 480px) {
+        body.dracula .sidebar {
+          border-bottom-color: #44475a;
+        }
+      }
+
+      /* Solarized Dark sidebar border for mobile */
+      @media (max-width: 480px) {
+        body.solarized-dark .sidebar {
+          border-bottom-color: #586e75;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <a class="sidebar-item" href="/" title="Terminal">
+            <span class="sidebar-icon">🦆</span>
+          </a>
+        </div>
+        <div class="sidebar-bottom">
+          <div class="sidebar-item active" title="User Guide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>
+            </svg>
+          </div>
+          <a class="sidebar-item" href="https://tobilg.github.io/duckdb-terminal/" target="_blank" rel="noopener" title="TypeScript API Docs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+          </a>
+          <a class="sidebar-item" href="https://sql-workbench.com" target="_blank" rel="noopener" title="SQL Workbench">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/>
+              <path d="m21 3-9 9"/>
+              <path d="M15 3h6v6"/>
+            </svg>
+          </a>
+          <a class="sidebar-item" href="https://github.com/tobilg/duckdb-terminal" target="_blank" rel="noopener" title="GitHub repository">
+            <svg role="img" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+            </svg>
+          </a>
+          <a class="sidebar-item" href="https://www.npmjs.com/package/duckdb-terminal" target="_blank" rel="noopener" title="npm package">
+            <svg role="img" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"/>
+            </svg>
+          </a>
+          <div class="sidebar-item" title="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <select class="theme-select" id="theme-select" style="position: absolute; opacity: 0; cursor: pointer;">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="tokyo-night">Tokyo Night</option>
+              <option value="dracula">Dracula</option>
+              <option value="solarized-dark">Solarized Dark</option>
+            </select>
+          </div>
+        </div>
+      </aside>
+
+      <nav class="guide-nav" id="guide-nav">
+        <div class="guide-nav-title">Getting Started</div>
+        <a href="#getting-started" class="guide-nav-link active">Introduction</a>
+        <a href="#first-query" class="guide-nav-link">Your First Query</a>
+        <a href="#multi-line" class="guide-nav-link">Multi-line Input</a>
+
+        <div class="guide-nav-title">Reference</div>
+        <a href="#commands" class="guide-nav-link">Terminal Commands</a>
+        <a href="#shortcuts" class="guide-nav-link">Keyboard Shortcuts</a>
+        <a href="#output-modes" class="guide-nav-link">Output Modes</a>
+
+        <div class="guide-nav-title">Features</div>
+        <a href="#files" class="guide-nav-link">Working with Files</a>
+        <a href="#charts" class="guide-nav-link">Charts</a>
+        <a href="#themes" class="guide-nav-link">Themes</a>
+
+        <div class="guide-nav-title">Examples</div>
+        <a href="#sql-basics" class="guide-nav-link">SQL Basics</a>
+        <a href="#duckdb-features" class="guide-nav-link">DuckDB Features</a>
+        <a href="#data-analysis" class="guide-nav-link">Data Analysis</a>
+        <a href="#external-data" class="guide-nav-link">External Data</a>
+      </nav>
+
+      <div class="guide-content-wrapper">
+        <main class="guide-content">
+          <!-- Hero Section -->
+          <section class="hero">
+            <h1>DuckDB Terminal User Guide</h1>
+            <p>A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export.</p>
+            <div class="hero-links">
+              <a href="/" class="hero-link">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="4 17 10 11 4 5"></polyline>
+                  <line x1="12" y1="19" x2="20" y2="19"></line>
+                </svg>
+                Open Terminal
+              </a>
+              <a href="https://github.com/tobilg/duckdb-terminal" class="hero-link secondary" target="_blank" rel="noopener">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+                </svg>
+                GitHub
+              </a>
+            </div>
+          </section>
+
+          <!-- Getting Started -->
+          <section id="getting-started" class="guide-section">
+            <h2>Getting Started</h2>
+            <p>DuckDB Terminal is a browser-based SQL interface that lets you run queries directly in your web browser. It uses <a href="https://duckdb.org/" target="_blank" rel="noopener">DuckDB WASM</a> for query execution and <a href="https://ghostty.org/" target="_blank" rel="noopener">Ghostty</a> for terminal emulation.</p>
+
+            <h3>Key Features</h3>
+            <ul>
+              <li><strong>Full SQL Support</strong> - Execute any DuckDB-compatible SQL query</li>
+              <li><strong>Command History</strong> - Navigate previous commands with arrow keys (persisted across sessions)</li>
+              <li><strong>Auto-Complete</strong> - Tab completion for SQL keywords, table names, and functions</li>
+              <li><strong>Multiple Output Formats</strong> - Table, CSV, TSV, or JSON output</li>
+              <li><strong>Interactive Charts</strong> - Visualize query results with auto-detected chart types</li>
+              <li><strong>File Loading</strong> - Load CSV, Parquet, and JSON files via drag-and-drop</li>
+              <li><strong>Syntax Highlighting</strong> - Color-coded SQL for better readability</li>
+            </ul>
+          </section>
+
+          <section id="first-query" class="guide-section">
+            <h3>Your First Query</h3>
+            <p>When you open the terminal, you'll see the duck prompt (<code>🦆</code>). Simply type a SQL query and press <kbd>Enter</kbd> to execute:</p>
+            <pre><code><span class="keyword">SELECT</span> <span class="string">'Hello, DuckDB!'</span> <span class="keyword">AS</span> greeting;</code></pre>
+            <p>The result will be displayed in a formatted table below your query.</p>
+
+            <div class="info-box tip">
+              <p><strong>Tip:</strong> Use <kbd>Tab</kbd> for auto-completion. Start typing a SQL keyword or table name and press Tab to see suggestions.</p>
+            </div>
+          </section>
+
+          <section id="multi-line" class="guide-section">
+            <h3>Multi-line Input</h3>
+            <p>For complex queries, you can write SQL across multiple lines. The terminal detects incomplete statements and shows a continuation prompt (<code>  &gt;</code>) until you complete the query with a semicolon:</p>
+            <pre><code><span class="keyword">SELECT</span>
+    id,
+    name,
+    email
+<span class="keyword">FROM</span> users
+<span class="keyword">WHERE</span> active = <span class="keyword">true</span>
+<span class="keyword">ORDER BY</span> name;</code></pre>
+          </section>
+
+          <!-- Terminal Commands -->
+          <section id="commands" class="guide-section">
+            <h2>Terminal Commands</h2>
+            <p>Terminal commands start with a dot (<code>.</code>) and provide various utilities. Type <code>.help</code> to see all available commands.</p>
+
+            <h3>Information Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.help</code></td><td>Show all available commands</td></tr>
+                <tr><td><code>.tables</code></td><td>List all tables in the database</td></tr>
+                <tr><td><code>.schema &lt;table&gt;</code></td><td>Show the schema of a specific table</td></tr>
+                <tr><td><code>.examples</code></td><td>Show example SQL queries</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Display Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.clear</code></td><td>Clear the terminal screen</td></tr>
+                <tr><td><code>.mode table|csv|tsv|json</code></td><td>Set the output format</td></tr>
+                <tr><td><code>.pagesize &lt;n&gt;</code></td><td>Set pagination size (0 to disable)</td></tr>
+                <tr><td><code>.timer on|off</code></td><td>Toggle query execution timing</td></tr>
+                <tr><td><code>.highlight on|off</code></td><td>Toggle syntax highlighting</td></tr>
+                <tr><td><code>.links on|off</code></td><td>Toggle clickable URL detection</td></tr>
+                <tr><td><code>.theme dark|light|...</code></td><td>Switch color theme</td></tr>
+                <tr><td><code>.prompt [primary] [cont]</code></td><td>Customize the command prompt</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Data Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.copy</code></td><td>Copy last query results to clipboard</td></tr>
+                <tr><td><code>.download [filename]</code></td><td>Download results as a file</td></tr>
+                <tr><td><code>.files [list|add|remove]</code></td><td>Manage loaded files</td></tr>
+                <tr><td><code>.open</code></td><td>Open file picker to load data files</td></tr>
+              </tbody>
+            </table>
+
+            <h3>System Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.clearhistory</code></td><td>Clear command history</td></tr>
+                <tr><td><code>.reset</code></td><td>Reset database and all settings</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Visualization Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.chart [options]</code></td><td>Show interactive chart of last query result</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- Keyboard Shortcuts -->
+          <section id="shortcuts" class="guide-section">
+            <h2>Keyboard Shortcuts</h2>
+
+            <h3>Navigation &amp; Editing</h3>
+            <table>
+              <thead>
+                <tr><th>Key</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><kbd>Enter</kbd></td><td>Execute command/SQL</td></tr>
+                <tr><td><kbd>Tab</kbd></td><td>Auto-complete</td></tr>
+                <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Navigate command history</td></tr>
+                <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Move cursor</td></tr>
+                <tr><td><kbd>Home</kbd></td><td>Move to start of line</td></tr>
+                <tr><td><kbd>End</kbd></td><td>Move to end of line</td></tr>
+                <tr><td><kbd>Backspace</kbd></td><td>Delete character before cursor</td></tr>
+                <tr><td><kbd>Delete</kbd></td><td>Delete character at cursor</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>A</kbd></td><td>Move to start of line</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>E</kbd></td><td>Move to end of line</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Clear from cursor to end of line</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>U</kbd></td><td>Clear entire line</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>Paste from clipboard</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Cancel current input</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Pagination Mode</h3>
+            <p>When viewing paginated results, these shortcuts are available:</p>
+            <table>
+              <thead>
+                <tr><th>Key</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><kbd>n</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></td><td>Next page</td></tr>
+                <tr><td><kbd>p</kbd> / <kbd>↑</kbd></td><td>Previous page</td></tr>
+                <tr><td><kbd>q</kbd> / <kbd>Escape</kbd> / <kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Quit pagination</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Chart Mode</h3>
+            <table>
+              <thead>
+                <tr><th>Key</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><kbd>Escape</kbd></td><td>Close the chart</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Cmd</kbd>+<kbd>S</kbd></td><td>Export chart as PNG</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <!-- Output Modes -->
+          <section id="output-modes" class="guide-section">
+            <h2>Output Modes</h2>
+            <p>Use <code>.mode</code> to switch between output formats. The format affects both display and clipboard/download content.</p>
+
+            <h3>Table Format (Default)</h3>
+            <p>Human-readable ASCII table with borders:</p>
+            <pre><code>+----+-------+-------------------+
+| id | name  | email             |
++----+-------+-------------------+
+| 1  | Alice | alice@example.com |
+| 2  | Bob   | bob@example.com   |
++----+-------+-------------------+</code></pre>
+
+            <h3>CSV Format</h3>
+            <p>Comma-separated values, ideal for spreadsheets:</p>
+            <pre><code>id,name,email
+1,Alice,alice@example.com
+2,Bob,bob@example.com</code></pre>
+
+            <h3>TSV Format</h3>
+            <p>Tab-separated values for data import:</p>
+            <pre><code>id	name	email
+1	Alice	alice@example.com
+2	Bob	bob@example.com</code></pre>
+
+            <h3>JSON Format</h3>
+            <p>Array of objects for APIs and JSON files:</p>
+            <pre><code>[
+  {"id": 1, "name": "Alice", "email": "alice@example.com"},
+  {"id": 2, "name": "Bob", "email": "bob@example.com"}
+]</code></pre>
+
+            <h3>Copying &amp; Downloading</h3>
+            <p>After running a query:</p>
+            <ul>
+              <li><code>.copy</code> - Copy results to clipboard in current format</li>
+              <li><code>.download</code> - Download as file (extension matches format)</li>
+              <li><code>.download mydata</code> - Download with custom filename</li>
+            </ul>
+
+            <h3>Pagination</h3>
+            <p>For large result sets, enable pagination:</p>
+            <pre><code>.pagesize 50  <span class="comment">-- Show 50 rows per page</span>
+.pagesize 0   <span class="comment">-- Disable pagination</span></code></pre>
+            <div class="info-box">
+              <p><strong>Note:</strong> Queries with explicit <code>LIMIT</code> or <code>OFFSET</code> bypass pagination.</p>
+            </div>
+          </section>
+
+          <!-- Working with Files -->
+          <section id="files" class="guide-section">
+            <h2>Working with Files</h2>
+            <p>DuckDB Terminal supports loading data files directly in your browser.</p>
+
+            <h3>Supported Formats</h3>
+            <ul>
+              <li><strong>CSV</strong> - Comma-separated values</li>
+              <li><strong>Parquet</strong> - Columnar storage format</li>
+              <li><strong>JSON</strong> - JSON files and JSON Lines</li>
+            </ul>
+
+            <h3>Loading Files</h3>
+            <p>There are two ways to load files:</p>
+
+            <h4>Drag and Drop</h4>
+            <p>Simply drag a file from your computer and drop it onto the terminal. The file will be registered and you can query it immediately.</p>
+
+            <h4>File Picker</h4>
+            <p>Use the <code>.open</code> command to open a file picker dialog.</p>
+
+            <h3>Querying Loaded Files</h3>
+            <p>Once loaded, files are accessible by their filename:</p>
+            <pre><code><span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="string">'sales.csv'</span> <span class="keyword">LIMIT</span> <span class="number">10</span>;
+
+<span class="keyword">SELECT</span> category, <span class="function">SUM</span>(amount)
+<span class="keyword">FROM</span> <span class="string">'transactions.parquet'</span>
+<span class="keyword">GROUP BY</span> category;</code></pre>
+
+            <h3>Managing Files</h3>
+            <pre><code>.files list    <span class="comment">-- Show all loaded files</span>
+.files add     <span class="comment">-- Open file picker</span>
+.files remove  <span class="comment">-- Remove a loaded file</span></code></pre>
+          </section>
+
+          <!-- Charts -->
+          <section id="charts" class="guide-section">
+            <h2>Charts &amp; Visualization</h2>
+            <p>Visualize query results with interactive charts powered by <a href="https://github.com/leeoniya/uPlot" target="_blank" rel="noopener">uPlot</a>.</p>
+
+            <h3>Basic Usage</h3>
+            <p>Run a query, then use <code>.chart</code> to visualize:</p>
+            <pre><code><span class="keyword">SELECT</span> date, revenue, cost <span class="keyword">FROM</span> sales;
+.chart</code></pre>
+
+            <h3>Auto-Detected Chart Types</h3>
+            <table>
+              <thead>
+                <tr><th>Data Pattern</th><th>Chart Type</th><th>Example</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Temporal + Numeric</td><td>Line</td><td>Date + revenue = time series</td></tr>
+                <tr><td>Categorical + Numeric</td><td>Bar</td><td>Category + total = bar chart</td></tr>
+                <tr><td>Two Numeric columns</td><td>Scatter</td><td>x_value + y_value = scatter plot</td></tr>
+                <tr><td>Single Numeric column</td><td>Histogram</td><td>value = distribution</td></tr>
+                <tr><td>Multiple Numeric columns</td><td>Line</td><td>col1, col2, col3 = multi-series</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Chart Options</h3>
+            <pre><code>.chart type=bar        <span class="comment">-- Force bar chart</span>
+.chart x=date          <span class="comment">-- Specify X-axis column</span>
+.chart y=revenue,cost  <span class="comment">-- Specify Y-axis columns</span>
+.chart export          <span class="comment">-- Export as PNG</span></code></pre>
+
+            <h3>Example: Time Series</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    <span class="keyword">DATE</span> <span class="string">'2024-01-01'</span> + <span class="keyword">INTERVAL</span> (i) <span class="keyword">DAY</span> <span class="keyword">AS</span> date,
+    <span class="number">100</span> + <span class="function">random</span>() * <span class="number">50</span> <span class="keyword">AS</span> revenue,
+    <span class="number">80</span> + <span class="function">random</span>() * <span class="number">30</span> <span class="keyword">AS</span> cost
+<span class="keyword">FROM</span> <span class="function">generate_series</span>(<span class="number">0</span>, <span class="number">30</span>) <span class="keyword">AS</span> t(i);
+.chart</code></pre>
+
+            <h3>Example: Bar Chart</h3>
+            <pre><code><span class="keyword">SELECT</span> category, <span class="function">SUM</span>(amount) <span class="keyword">as</span> total
+<span class="keyword">FROM</span> (<span class="keyword">VALUES</span>
+    (<span class="string">'Electronics'</span>, <span class="number">1500</span>),
+    (<span class="string">'Clothing'</span>, <span class="number">800</span>),
+    (<span class="string">'Food'</span>, <span class="number">1200</span>),
+    (<span class="string">'Books'</span>, <span class="number">400</span>)
+) <span class="keyword">AS</span> t(category, amount)
+<span class="keyword">GROUP BY</span> category;
+.chart</code></pre>
+
+            <h3>Example: Histogram</h3>
+            <pre><code><span class="keyword">SELECT</span> (<span class="function">random</span>() * <span class="number">100</span>)::<span class="keyword">INTEGER</span> <span class="keyword">AS</span> value
+<span class="keyword">FROM</span> <span class="function">generate_series</span>(<span class="number">1</span>, <span class="number">200</span>);
+.chart</code></pre>
+          </section>
+
+          <!-- Themes -->
+          <section id="themes" class="guide-section">
+            <h2>Themes</h2>
+            <p>DuckDB Terminal includes five color themes. Switch using the settings dropdown in the sidebar or the <code>.theme</code> command.</p>
+
+            <h3>Available Themes</h3>
+            <div class="theme-swatch">
+              <span class="theme-color" style="background: #1e1e1e;"></span>
+              <strong>Dark</strong> (default) - VS Code dark theme
+            </div>
+            <div class="theme-swatch">
+              <span class="theme-color" style="background: #ffffff; border-color: #ccc;"></span>
+              <strong>Light</strong> - Clean light theme
+            </div>
+            <div class="theme-swatch">
+              <span class="theme-color" style="background: #1a1b26;"></span>
+              <strong>Tokyo Night</strong> - Popular dark theme with purple accents
+            </div>
+            <div class="theme-swatch">
+              <span class="theme-color" style="background: #282a36;"></span>
+              <strong>Dracula</strong> - Dark theme with vibrant colors
+            </div>
+            <div class="theme-swatch">
+              <span class="theme-color" style="background: #002b36;"></span>
+              <strong>Solarized Dark</strong> - Low-contrast dark theme
+            </div>
+
+            <h3>Switching Themes</h3>
+            <pre><code>.theme dark
+.theme light
+.theme tokyo-night
+.theme dracula
+.theme solarized-dark</code></pre>
+            <div class="info-box">
+              <p><strong>Note:</strong> Theme changes reload the page. Your command history is preserved, but terminal output is cleared.</p>
+            </div>
+          </section>
+
+          <!-- SQL Basics -->
+          <section id="sql-basics" class="guide-section">
+            <h2>SQL Basics</h2>
+            <p>Here are some common SQL operations to get you started.</p>
+
+            <h3>Creating Tables</h3>
+            <pre><code><span class="keyword">CREATE TABLE</span> users (
+    id <span class="keyword">INTEGER PRIMARY KEY</span>,
+    name <span class="keyword">VARCHAR</span>,
+    email <span class="keyword">VARCHAR</span>,
+    created_at <span class="keyword">TIMESTAMP DEFAULT</span> <span class="function">current_timestamp</span>
+);</code></pre>
+
+            <h3>Inserting Data</h3>
+            <pre><code><span class="keyword">INSERT INTO</span> users (id, name, email) <span class="keyword">VALUES</span>
+    (<span class="number">1</span>, <span class="string">'Alice'</span>, <span class="string">'alice@example.com'</span>),
+    (<span class="number">2</span>, <span class="string">'Bob'</span>, <span class="string">'bob@example.com'</span>),
+    (<span class="number">3</span>, <span class="string">'Charlie'</span>, <span class="string">'charlie@example.com'</span>);</code></pre>
+
+            <h3>Querying Data</h3>
+            <pre><code><span class="comment">-- Select all</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> users;
+
+<span class="comment">-- With conditions</span>
+<span class="keyword">SELECT</span> name, email
+<span class="keyword">FROM</span> users
+<span class="keyword">WHERE</span> name <span class="keyword">LIKE</span> <span class="string">'A%'</span>
+<span class="keyword">ORDER BY</span> name;
+
+<span class="comment">-- With limit</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> users <span class="keyword">LIMIT</span> <span class="number">10</span>;</code></pre>
+
+            <h3>Joins</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    u.name,
+    o.order_date,
+    o.total
+<span class="keyword">FROM</span> users u
+<span class="keyword">JOIN</span> orders o <span class="keyword">ON</span> u.id = o.user_id
+<span class="keyword">WHERE</span> o.total > <span class="number">100</span>;</code></pre>
+          </section>
+
+          <!-- DuckDB Features -->
+          <section id="duckdb-features" class="guide-section">
+            <h2>DuckDB Features</h2>
+            <p>DuckDB includes many powerful features beyond standard SQL.</p>
+
+            <h3>Generate Series</h3>
+            <pre><code><span class="comment">-- Generate numbers 1-10</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">generate_series</span>(<span class="number">1</span>, <span class="number">10</span>);
+
+<span class="comment">-- Generate dates</span>
+<span class="keyword">SELECT</span> <span class="function">generate_series</span>(
+    <span class="keyword">DATE</span> <span class="string">'2024-01-01'</span>,
+    <span class="keyword">DATE</span> <span class="string">'2024-12-31'</span>,
+    <span class="keyword">INTERVAL</span> <span class="string">'1 month'</span>
+);</code></pre>
+
+            <h3>Range Function</h3>
+            <pre><code><span class="keyword">SELECT</span> <span class="function">range</span>(<span class="number">10</span>);  <span class="comment">-- Returns [0,1,2,3,4,5,6,7,8,9]</span>
+<span class="keyword">SELECT</span> <span class="function">range</span>(<span class="number">5</span>, <span class="number">10</span>); <span class="comment">-- Returns [5,6,7,8,9]</span></code></pre>
+
+            <h3>Date/Time Functions</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    <span class="function">current_date</span>,
+    <span class="function">current_timestamp</span>,
+    <span class="function">date_part</span>(<span class="string">'year'</span>, <span class="function">current_date</span>) <span class="keyword">AS</span> year,
+    <span class="function">date_trunc</span>(<span class="string">'month'</span>, <span class="function">current_date</span>) <span class="keyword">AS</span> month_start;</code></pre>
+
+            <h3>JSON Functions</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    <span class="function">json_extract</span>(<span class="string">'{"name": "Alice", "age": 30}'</span>, <span class="string">'$.name'</span>) <span class="keyword">AS</span> name,
+    <span class="function">json_extract_string</span>(<span class="string">'{"city": "NYC"}'</span>, <span class="string">'$.city'</span>) <span class="keyword">AS</span> city;</code></pre>
+
+            <h3>String Functions</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    <span class="function">upper</span>(<span class="string">'hello'</span>) <span class="keyword">AS</span> upper,
+    <span class="function">lower</span>(<span class="string">'HELLO'</span>) <span class="keyword">AS</span> lower,
+    <span class="function">concat</span>(<span class="string">'Hello'</span>, <span class="string">' '</span>, <span class="string">'World'</span>) <span class="keyword">AS</span> concat,
+    <span class="function">substring</span>(<span class="string">'Hello World'</span>, <span class="number">1</span>, <span class="number">5</span>) <span class="keyword">AS</span> substr;</code></pre>
+
+            <h3>Window Functions</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    name,
+    department,
+    salary,
+    <span class="function">ROW_NUMBER</span>() <span class="keyword">OVER</span> (<span class="keyword">PARTITION BY</span> department <span class="keyword">ORDER BY</span> salary <span class="keyword">DESC</span>) <span class="keyword">AS</span> rank,
+    <span class="function">AVG</span>(salary) <span class="keyword">OVER</span> (<span class="keyword">PARTITION BY</span> department) <span class="keyword">AS</span> dept_avg
+<span class="keyword">FROM</span> employees;</code></pre>
+          </section>
+
+          <!-- Data Analysis -->
+          <section id="data-analysis" class="guide-section">
+            <h2>Data Analysis Patterns</h2>
+
+            <h3>Aggregation</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    category,
+    <span class="function">COUNT</span>(*) <span class="keyword">AS</span> count,
+    <span class="function">SUM</span>(amount) <span class="keyword">AS</span> total,
+    <span class="function">AVG</span>(amount) <span class="keyword">AS</span> average,
+    <span class="function">MIN</span>(amount) <span class="keyword">AS</span> min,
+    <span class="function">MAX</span>(amount) <span class="keyword">AS</span> max
+<span class="keyword">FROM</span> transactions
+<span class="keyword">GROUP BY</span> category
+<span class="keyword">ORDER BY</span> total <span class="keyword">DESC</span>;</code></pre>
+
+            <h3>Pivot Tables</h3>
+            <pre><code><span class="keyword">SELECT</span>
+    region,
+    <span class="function">SUM</span>(<span class="keyword">CASE WHEN</span> product = <span class="string">'A'</span> <span class="keyword">THEN</span> sales <span class="keyword">ELSE</span> <span class="number">0</span> <span class="keyword">END</span>) <span class="keyword">AS</span> product_a,
+    <span class="function">SUM</span>(<span class="keyword">CASE WHEN</span> product = <span class="string">'B'</span> <span class="keyword">THEN</span> sales <span class="keyword">ELSE</span> <span class="number">0</span> <span class="keyword">END</span>) <span class="keyword">AS</span> product_b,
+    <span class="function">SUM</span>(<span class="keyword">CASE WHEN</span> product = <span class="string">'C'</span> <span class="keyword">THEN</span> sales <span class="keyword">ELSE</span> <span class="number">0</span> <span class="keyword">END</span>) <span class="keyword">AS</span> product_c
+<span class="keyword">FROM</span> sales
+<span class="keyword">GROUP BY</span> region;</code></pre>
+
+            <h3>Common Table Expressions (CTEs)</h3>
+            <pre><code><span class="keyword">WITH</span> monthly_sales <span class="keyword">AS</span> (
+    <span class="keyword">SELECT</span>
+        <span class="function">date_trunc</span>(<span class="string">'month'</span>, order_date) <span class="keyword">AS</span> month,
+        <span class="function">SUM</span>(total) <span class="keyword">AS</span> revenue
+    <span class="keyword">FROM</span> orders
+    <span class="keyword">GROUP BY</span> <span class="number">1</span>
+)
+<span class="keyword">SELECT</span>
+    month,
+    revenue,
+    <span class="function">LAG</span>(revenue) <span class="keyword">OVER</span> (<span class="keyword">ORDER BY</span> month) <span class="keyword">AS</span> prev_month,
+    revenue - <span class="function">LAG</span>(revenue) <span class="keyword">OVER</span> (<span class="keyword">ORDER BY</span> month) <span class="keyword">AS</span> growth
+<span class="keyword">FROM</span> monthly_sales;</code></pre>
+
+            <h3>Subqueries</h3>
+            <pre><code><span class="keyword">SELECT</span> *
+<span class="keyword">FROM</span> products
+<span class="keyword">WHERE</span> price > (
+    <span class="keyword">SELECT</span> <span class="function">AVG</span>(price) <span class="keyword">FROM</span> products
+);</code></pre>
+          </section>
+
+          <!-- External Data -->
+          <section id="external-data" class="guide-section">
+            <h2>External Data</h2>
+            <p>DuckDB can query files directly without importing them first.</p>
+
+            <h3>CSV Files</h3>
+            <pre><code><span class="comment">-- Query local file (after drag-drop or .open)</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="string">'sales_data.csv'</span>;
+
+<span class="comment">-- With options</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">read_csv</span>(<span class="string">'data.csv'</span>, header=<span class="keyword">true</span>, delim=<span class="string">','</span>);</code></pre>
+
+            <h3>Parquet Files</h3>
+            <pre><code><span class="comment">-- Query parquet directly</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="string">'analytics.parquet'</span>;
+
+<span class="comment">-- With column selection (efficient - only reads needed columns)</span>
+<span class="keyword">SELECT</span> date, revenue
+<span class="keyword">FROM</span> <span class="string">'large_dataset.parquet'</span>
+<span class="keyword">WHERE</span> date >= <span class="string">'2024-01-01'</span>;</code></pre>
+
+            <h3>JSON Files</h3>
+            <pre><code><span class="comment">-- Query JSON array</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="string">'users.json'</span>;
+
+<span class="comment">-- JSON Lines format</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">read_json</span>(<span class="string">'logs.jsonl'</span>, format=<span class="string">'newline_delimited'</span>);</code></pre>
+
+            <h3>HTTP/HTTPS Files</h3>
+            <pre><code><span class="comment">-- Query remote CSV</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="string">'https://example.com/data.csv'</span>;
+
+<span class="comment">-- Query remote Parquet</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="string">'https://example.com/dataset.parquet'</span>;</code></pre>
+
+            <div class="info-box warning">
+              <p><strong>Note:</strong> Remote file access requires CORS headers from the server. Some public datasets may not be accessible due to CORS restrictions.</p>
+            </div>
+          </section>
+
+        </main>
+      </div>
+
+      <!-- Mobile nav toggle button -->
+      <button class="guide-nav-toggle" id="guide-nav-toggle" aria-label="Toggle navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <script type="module" src="/src/guide.ts"></script>
+  </body>
+</html>
