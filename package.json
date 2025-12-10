@@ -5,6 +5,7 @@
     "packages/*"
   ],
   "scripts": {
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/website/.vite",
     "dev": "npm run dev -w @duckdb-terminal/website",
     "build": "npm run build -w duckdb-terminal && npm run build -w @duckdb-terminal/website",
     "build:lib": "npm run build -w duckdb-terminal",

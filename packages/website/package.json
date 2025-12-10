@@ -9,9 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "duckdb-terminal": "*",
-    "@duckdb/duckdb-wasm": "^1.31.1-dev31.0",
-    "ghostty-web": "^0.3.0"
+    "duckdb-terminal": "*"
   },
   "devDependencies": {
     "vite": "^7.2.6"
