@@ -9,7 +9,7 @@
     "dev": "npm run dev -w @duckdb-terminal/website",
     "build": "npm run build -w duckdb-terminal && npm run build -w @duckdb-terminal/website",
     "build:lib": "npm run build -w duckdb-terminal",
-    "build:website": "npm run build -w @duckdb-terminal/website",
+    "build:website": "npm run build:lib && npm run build -w @duckdb-terminal/website",
     "test": "npm run test -w duckdb-terminal",
     "test:ui": "npm run test:ui -w duckdb-terminal",
     "test:coverage": "npm run test:coverage -w duckdb-terminal",
