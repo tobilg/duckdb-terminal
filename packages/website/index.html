@@ -204,6 +204,13 @@
         pointer-events: none;
       }
 
+      /* Button reset for sidebar buttons */
+      button.sidebar-item {
+        background: none;
+        border: none;
+        font: inherit;
+      }
+
       .theme-select {
         background: transparent;
         border: none;
@@ -832,6 +839,15 @@
           </div>
         </div>
         <div class="sidebar-bottom">
+          <button class="sidebar-item" id="sidebar-share" title="Share queries (.share)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"></circle>
+              <circle cx="6" cy="12" r="3"></circle>
+              <circle cx="18" cy="19" r="3"></circle>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+            </svg>
+          </button>
           <a class="sidebar-item" href="/guide/" title="User Guide">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>
@@ -921,6 +937,15 @@
             <polyline points="14 2 14 8 20 8"></polyline>
             <line x1="12" y1="18" x2="12" y2="12"></line>
             <line x1="9" y1="15" x2="15" y2="15"></line>
+          </svg>
+        </button>
+        <button class="action-btn" id="action-share" title="Share queries">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="18" cy="5" r="3"></circle>
+            <circle cx="6" cy="12" r="3"></circle>
+            <circle cx="18" cy="19" r="3"></circle>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
           </svg>
         </button>
         <a class="action-btn" href="https://tobilg.github.io/duckdb-terminal/" target="_blank" rel="noopener" title="TypeScript API Docs">

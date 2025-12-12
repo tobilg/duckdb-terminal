@@ -2,7 +2,7 @@
  * DuckDB Terminal - Demo Application Entry Point
  */
 
-import { createTerminal, darkTheme, lightTheme } from 'duckdb-terminal';
+import { createTerminal, darkTheme, lightTheme, parseShareableURL, clearShareableURL } from 'duckdb-terminal';
 import type { Theme, ThemeColors } from 'duckdb-terminal';
 
 // Custom theme: Tokyo Night
@@ -138,6 +138,7 @@ function setupMobileActions(terminal: Awaited<ReturnType<typeof createTerminal>>
   const clearBtn = document.getElementById('action-clear');
   const helpBtn = document.getElementById('action-help');
   const filesBtn = document.getElementById('action-files');
+  const shareBtn = document.getElementById('action-share');
 
   // Open keyboard - this is the primary action for mobile users
   keyboardBtn?.addEventListener('click', (e) => {
@@ -178,6 +179,22 @@ function setupMobileActions(terminal: Awaited<ReturnType<typeof createTerminal>>
     // Simulate typing .open and pressing enter
     (terminal as any).terminalAdapter?.write('.open\r');
     (terminal as any).terminalAdapter?.focus();
+  });
+
+  // Open sharing modal
+  shareBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    (terminal as any).openSharingModal?.();
+  });
+}
+
+// Set up sidebar share button
+function setupSidebarShare(terminal: Awaited<ReturnType<typeof createTerminal>>): void {
+  const sidebarShareBtn = document.getElementById('sidebar-share');
+
+  sidebarShareBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    (terminal as any).openSharingModal?.();
   });
 }
 
@@ -236,6 +253,35 @@ async function main() {
 
     // Set up mobile action buttons
     setupMobileActions(terminal);
+
+    // Set up sidebar share button
+    setupSidebarShare(terminal);
+
+    // Check for shared queries in URL
+    const sharedQueries = parseShareableURL();
+    if (sharedQueries && sharedQueries.length > 0) {
+      // Clear the URL to prevent re-execution on refresh
+      clearShareableURL();
+
+      // Execute shared queries sequentially
+      // Clear the prompt line first (move to start of line and clear it)
+      terminal.write('\r\x1b[K');
+      terminal.writeln('Executing shared queries...');
+      terminal.writeln('');
+
+      for (const query of sharedQueries) {
+        // Print the query being executed
+        terminal.writeln(`🦆 ${query}`);
+        terminal.writeln('');
+
+        // Execute the query
+        await terminal.executeSQL(query);
+        terminal.writeln('');
+      }
+
+      // Show the prompt after all queries are executed
+      terminal.refreshPrompt();
+    }
   } catch (error) {
     console.error('Failed to initialize terminal:', error);
     // Use textContent to prevent XSS from error messages

@@ -164,3 +164,25 @@ export {
   bold,
   dim,
 } from './utils/vt100';
+
+// Export sharing utilities
+export {
+  SharingModal,
+  encodeQueryForURL,
+  decodeQueryFromURL,
+  generateShareableURL,
+  parseShareableURL,
+  clearShareableURL,
+  calculateURLLength,
+  wouldExceedLimit,
+  getBaseShareURL,
+  getEncodedQueryLength,
+  MAX_URL_LENGTH,
+} from './sharing';
+export type {
+  SharingModalState,
+  ShareableQuery,
+  SharingModalEvents,
+  SharingModalConfig,
+  ShareableURLResult,
+} from './sharing';

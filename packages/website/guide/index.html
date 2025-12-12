@@ -1300,6 +1300,7 @@
         <div class="guide-nav-title">Features</div>
         <a href="#files" class="guide-nav-link">Working with Files</a>
         <a href="#charts" class="guide-nav-link">Charts</a>
+        <a href="#sharing" class="guide-nav-link">Query Sharing</a>
         <a href="#themes" class="guide-nav-link">Themes</a>
 
         <div class="guide-nav-title">Examples</div>
@@ -1344,6 +1345,7 @@
               <li><strong>Auto-Complete</strong> - Tab completion for SQL keywords, table names, and functions</li>
               <li><strong>Multiple Output Formats</strong> - Table, CSV, TSV, or JSON output</li>
               <li><strong>Interactive Charts</strong> - Visualize query results with auto-detected chart types</li>
+              <li><strong>Query Sharing</strong> - Share SQL queries via URL for collaboration</li>
               <li><strong>File Loading</strong> - Load CSV, Parquet, and JSON files via drag-and-drop</li>
               <li><strong>Syntax Highlighting</strong> - Color-coded SQL for better readability</li>
             </ul>
@@ -1632,6 +1634,71 @@
             <pre><code><span class="keyword">SELECT</span> (<span class="function">random</span>() * <span class="number">100</span>)::<span class="keyword">INTEGER</span> <span class="keyword">AS</span> value
 <span class="keyword">FROM</span> <span class="function">generate_series</span>(<span class="number">1</span>, <span class="number">200</span>);
 .chart</code></pre>
+          </section>
+
+          <!-- Query Sharing -->
+          <section id="sharing" class="guide-section">
+            <h2>Query Sharing</h2>
+            <p>Share SQL queries via URL to collaborate with others. When someone opens a shared link, the queries execute automatically in the terminal.</p>
+
+            <h3>Opening the Share Modal</h3>
+            <p>There are two ways to open the sharing modal:</p>
+            <ul>
+              <li>Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> (or <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> on Mac)</li>
+              <li>Click the share button in the sidebar (desktop) or mobile action bar</li>
+            </ul>
+
+            <h3>Selecting Queries</h3>
+            <p>The modal displays your recent SQL queries from history. Dot commands (like <code>.help</code>) are excluded since they are terminal-specific.</p>
+            <ol>
+              <li>Navigate the list using arrow keys or mouse</li>
+              <li>Press <kbd>Space</kbd> or click to select/deselect queries</li>
+              <li>Watch the character counter to stay within the 2000 character URL limit</li>
+              <li>Selected queries will execute in order (oldest first) when the link is opened</li>
+            </ol>
+
+            <div class="info-box">
+              <p><strong>Note:</strong> The URL length is limited to 2000 characters for maximum browser compatibility. Complex queries may need to be simplified or split.</p>
+            </div>
+
+            <h3>Copying the Link</h3>
+            <p>Once you've selected queries:</p>
+            <ul>
+              <li>Press <kbd>Enter</kbd> to copy the shareable link to clipboard</li>
+              <li>Or click the "Copy shareable link" button</li>
+            </ul>
+            <p>The modal closes automatically after copying.</p>
+
+            <h3>Receiving Shared Links</h3>
+            <p>When someone opens a shared URL:</p>
+            <ol>
+              <li>The terminal loads normally with the welcome message</li>
+              <li>After initialization, the shared queries execute automatically</li>
+              <li>Each query is displayed with its output</li>
+              <li>The URL is cleared to prevent re-execution on page refresh</li>
+            </ol>
+
+            <h3>Keyboard Shortcuts</h3>
+            <table>
+              <thead>
+                <tr><th>Key</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Navigate query list</td></tr>
+                <tr><td><kbd>Space</kbd></td><td>Select/deselect query</td></tr>
+                <tr><td><kbd>Enter</kbd></td><td>Copy shareable link and close</td></tr>
+                <tr><td><kbd>Escape</kbd></td><td>Close modal without copying</td></tr>
+              </tbody>
+            </table>
+
+            <h3>URL Format</h3>
+            <p>Shared URLs use a hash-based format with Base64-encoded queries:</p>
+            <pre><code>https://terminal.sql-workbench.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2</code></pre>
+            <ul>
+              <li>The <code>v1</code> prefix indicates the URL format version</li>
+              <li>Each query is URL-safe Base64 encoded (no special characters)</li>
+              <li>Queries are separated by commas</li>
+            </ul>
           </section>
 
           <!-- Themes -->

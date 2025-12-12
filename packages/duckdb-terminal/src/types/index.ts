@@ -290,6 +290,11 @@ export interface TerminalInterface {
    * @returns The current theme mode
    */
   getTheme(): 'dark' | 'light';
+  /**
+   * Displays the command prompt.
+   * Useful after programmatically executing SQL to show the prompt for next input.
+   */
+  refreshPrompt(): void;
 }
 
 /**

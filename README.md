@@ -25,6 +25,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 - **Query Timing** - Optional execution time display
 - **Persistent Storage** - Optional OPFS storage for data persistence
 - **Interactive Charts** - Visualize query results with auto-detected chart types (line, bar, scatter, histogram)
+- **Query Sharing** - Share SQL queries via URL for collaboration
 
 ## Architecture
 
@@ -153,25 +154,26 @@ interface TerminalConfig {
 
 | Command | Description |
 |---------|-------------|
-| `.help` | Show available commands |
+| `.chart [options]` | Show interactive chart of last query result |
 | `.clear` | Clear the terminal |
 | `.clearhistory` | Clear command history |
-| `.tables` | List all tables |
-| `.schema <table>` | Show table schema |
-| `.timer on\|off` | Toggle query timing |
-| `.mode table\|csv\|tsv\|json` | Set output format |
 | `.copy` | Copy last query results to clipboard |
 | `.download [filename]` | Download last result as file (format based on mode) |
-| `.pagesize <n>` | Set pagination size (0 to disable) |
-| `.theme dark\|light` | Switch color theme (clears screen) |
+| `.examples` | Show example queries |
+| `.files [list\|add\|remove]` | Manage loaded files (list, add, or remove) |
+| `.help` | Show available commands |
 | `.highlight on\|off` | Toggle syntax highlighting |
 | `.links on\|off` | Toggle clickable URL detection |
-| `.files [list\|add\|remove]` | Manage loaded files (list, add, or remove) |
+| `.mode table\|csv\|tsv\|json` | Set output format |
 | `.open` | Open file picker to load data files |
+| `.pagesize <n>` | Set pagination size (0 to disable) |
 | `.prompt [primary [cont]]` | Get or set the command prompt |
-| `.examples` | Show example queries |
 | `.reset` | Reset database and all settings to defaults |
-| `.chart [options]` | Show interactive chart of last query result |
+| `.schema <table>` | Show table schema |
+| `.share` | Open sharing modal to share queries via URL |
+| `.tables` | List all tables |
+| `.theme dark\|light` | Switch color theme (clears screen) |
+| `.timer on\|off` | Toggle query timing |
 
 ## Charts
 
@@ -272,6 +274,42 @@ FROM generate_series(0, 20) AS t(i);
 | Hover | Show tooltip with values at cursor position |
 | `ESC` | Close the chart |
 | `Ctrl+S` / `Cmd+S` | Export chart as PNG |
+
+## Query Sharing
+
+Share SQL queries via URL to collaborate with others. When someone opens a shared link, the queries execute automatically.
+
+### Opening the Share Modal
+
+- Press `Ctrl+Shift+S` (or `Cmd+Shift+S` on Mac)
+- Click the share button in the sidebar (desktop) or mobile action bar
+
+### Selecting Queries
+
+1. The modal shows your recent SQL queries (dot commands are excluded)
+2. Click or press `Space` to select/deselect queries
+3. The character count shows how much of the 2000 character URL limit is used
+4. Selected queries will execute in order (oldest first) when the link is opened
+
+### URL Format
+
+Shared URLs use a hash-based format:
+```
+https://terminal.sql-workbench.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2,...
+```
+
+- Each query is URL-safe Base64 encoded
+- Maximum URL length is 2000 characters for browser compatibility
+- URLs are versioned (v1) for future compatibility
+
+### Keyboard Shortcuts in Share Modal
+
+| Key | Action |
+|-----|--------|
+| `Space` | Select/deselect query |
+| `↑` / `↓` | Navigate query list |
+| `Enter` | Copy shareable link |
+| `Escape` | Close modal |
 
 ## Keyboard Shortcuts
 

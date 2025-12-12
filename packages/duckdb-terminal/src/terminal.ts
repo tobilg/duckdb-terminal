@@ -19,6 +19,7 @@ import { debounce } from './utils/debounce';
 import { parseCommand } from './utils/command-parser';
 import { LinkProvider } from './utils/link-provider';
 import { ChartManager } from './charts';
+import { SharingModal } from './sharing';
 import * as vt100 from './utils/vt100';
 import type {
   TerminalConfig,
@@ -118,6 +119,7 @@ export class DuckDBTerminal implements TerminalInterface {
   private lastQueryResult: QueryResult | null = null;
   private linkProvider: LinkProvider;
   private chartManager: ChartManager | null = null;
+  private sharingModal: SharingModal | null = null;
 
   // Event emitter
   private eventListeners: Map<keyof TerminalEvents, Set<TerminalEventListener<any>>> = new Map();
@@ -498,11 +500,51 @@ export class DuckDBTerminal implements TerminalInterface {
       this.chartManager = null;
     }
 
+    // Clean up sharing modal
+    if (this.sharingModal) {
+      this.sharingModal.destroy();
+      this.sharingModal = null;
+    }
+
     // Clear event listeners
     this.eventListeners.clear();
 
     // Cancel any pending debounced operations
     this.debouncedHighlight.cancel();
+  }
+
+  /**
+   * Opens the sharing modal to select queries for sharing.
+   *
+   * The modal displays the command history (excluding dot commands) and allows
+   * the user to select queries to include in a shareable URL.
+   */
+  openSharingModal(): void {
+    // Don't open if we're in a modal state already
+    if (this.state === 'executing') {
+      return;
+    }
+
+    // Initialize sharing modal on first use
+    if (!this.sharingModal) {
+      const container = this.resolveContainer();
+      this.sharingModal = new SharingModal(
+        container,
+        {}, // events
+        {
+          maxUrlLength: 2000,
+          initialQueryCount: 5,
+          loadMoreCount: 5,
+        }
+      );
+    }
+
+    // Get history and filter out dot commands
+    const allHistory = this.history.getAll();
+    const sqlHistory = allHistory.filter(cmd => !cmd.trim().startsWith('.'));
+
+    // Show the modal with filtered history
+    this.sharingModal.show(sqlHistory);
   }
 
   /**
@@ -739,6 +781,12 @@ export class DuckDBTerminal implements TerminalInterface {
       name: '.clearhistory',
       description: 'Clear command history',
       handler: () => this.cmdClearHistory(),
+    });
+
+    this.commands.set('.share', {
+      name: '.share',
+      description: 'Open sharing modal to share queries',
+      handler: () => this.openSharingModal(),
     });
   }
 
@@ -2103,5 +2151,28 @@ export class DuckDBTerminal implements TerminalInterface {
       return this.customTheme.name === 'light' ? 'light' : 'dark';
     }
     return this.currentThemeName as 'dark' | 'light';
+  }
+
+  /**
+   * Displays the command prompt.
+   *
+   * Useful after programmatically executing SQL via {@link executeSQL} to
+   * show the prompt for the next input. This is automatically called when
+   * the user enters commands via the terminal, but needs to be called
+   * manually when executing queries programmatically.
+   *
+   * @example
+   * ```typescript
+   * // Execute queries programmatically and show the prompt afterward
+   * await terminal.executeSQL('CREATE TABLE users (id INT, name VARCHAR);');
+   * await terminal.executeSQL("INSERT INTO users VALUES (1, 'Alice');");
+   * terminal.refreshPrompt();
+   * ```
+   */
+  refreshPrompt(): void {
+    // Only show prompt if not in a special state
+    if (this.state !== 'paginating' && this.state !== 'executing') {
+      this.showPrompt();
+    }
   }
 }
