@@ -270,8 +270,9 @@ async function main() {
       terminal.writeln('');
 
       for (const query of sharedQueries) {
-        // Print the query being executed
-        terminal.writeln(`🦆 ${query}`);
+        // Print the query being executed with syntax highlighting
+        const highlightedQuery = await terminal.highlightSQL(query);
+        terminal.writeln(`🦆 ${highlightedQuery}`);
         terminal.writeln('');
 
         // Execute the query

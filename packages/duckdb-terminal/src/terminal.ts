@@ -1486,6 +1486,33 @@ export class DuckDBTerminal implements TerminalInterface {
   }
 
   /**
+   * Highlights SQL using DuckDB's tokenizer for syntax coloring.
+   *
+   * This method uses DuckDB's internal parser (via the poached extension) to
+   * tokenize the SQL and apply ANSI color codes for keywords, strings, numbers,
+   * functions, etc. The result can be written to the terminal for colored output.
+   *
+   * @param sql - The SQL string to highlight
+   * @returns The highlighted SQL string with ANSI color codes, or the original
+   *          SQL if highlighting is disabled or tokenization fails
+   *
+   * @example Highlight and display a query
+   * ```typescript
+   * const highlighted = await terminal.highlightSQL('SELECT * FROM users;');
+   * terminal.writeln(highlighted);
+   * ```
+   */
+  async highlightSQL(sql: string): Promise<string> {
+    if (this.database.isPoachedLoaded()) {
+      const tokens = await this.database.tokenizeSQL(sql);
+      if (tokens) {
+        return highlightSQL(sql, tokens);
+      }
+    }
+    return sql;
+  }
+
+  /**
    * Internal SQL execution logic.
    *
    * @internal
