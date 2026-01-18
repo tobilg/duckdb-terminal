@@ -1301,6 +1301,7 @@
         <a href="#files" class="guide-nav-link">Working with Files</a>
         <a href="#charts" class="guide-nav-link">Charts</a>
         <a href="#sharing" class="guide-nav-link">Query Sharing</a>
+        <a href="#ai" class="guide-nav-link">AI SQL Generation</a>
         <a href="#themes" class="guide-nav-link">Themes</a>
 
         <div class="guide-nav-title">Examples</div>
@@ -1346,6 +1347,7 @@
               <li><strong>Multiple Output Formats</strong> - Table, CSV, TSV, or JSON output</li>
               <li><strong>Interactive Charts</strong> - Visualize query results with auto-detected chart types</li>
               <li><strong>Query Sharing</strong> - Share SQL queries via URL for collaboration</li>
+              <li><strong>AI-Powered SQL</strong> - Generate SQL from natural language using a text-to-sql proxy</li>
               <li><strong>File Loading</strong> - Load CSV, Parquet, and JSON files via drag-and-drop</li>
               <li><strong>Syntax Highlighting</strong> - Color-coded SQL for better readability</li>
             </ul>
@@ -1440,6 +1442,21 @@
               </thead>
               <tbody>
                 <tr><td><code>.chart [options]</code></td><td>Show interactive chart of last query result</td></tr>
+              </tbody>
+            </table>
+
+            <h3>AI Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.ai &lt;question&gt;</code></td><td>Generate SQL from natural language (shorthand)</td></tr>
+                <tr><td><code>.ai query &lt;question&gt;</code></td><td>Generate SQL from natural language</td></tr>
+                <tr><td><code>.ai provider list</code></td><td>List available AI providers</td></tr>
+                <tr><td><code>.ai provider set &lt;name&gt;</code></td><td>Set the AI provider</td></tr>
+                <tr><td><code>.ai endpoint get</code></td><td>Show current proxy endpoint</td></tr>
+                <tr><td><code>.ai endpoint set &lt;url&gt;</code></td><td>Set proxy endpoint URL</td></tr>
               </tbody>
             </table>
           </section>
@@ -1698,6 +1715,75 @@
               <li>The <code>v1</code> prefix indicates the URL format version</li>
               <li>Each query is URL-safe Base64 encoded (no special characters)</li>
               <li>Queries are separated by commas</li>
+            </ul>
+          </section>
+
+          <!-- AI SQL Generation -->
+          <section id="ai" class="guide-section">
+            <h2>AI-Powered SQL Generation</h2>
+            <p>Generate SQL queries from natural language using a text-to-sql proxy. This feature requires running the <a href="https://github.com/tobilg/text-to-sql-proxy" target="_blank" rel="noopener">Text-to-SQL Proxy</a> locally or on a server.</p>
+
+            <h3>Setup</h3>
+            <ol>
+              <li>Install and run the <a href="https://github.com/tobilg/text-to-sql-proxy" target="_blank" rel="noopener">Text-to-SQL Proxy</a></li>
+              <li>The proxy runs on <code>http://localhost:4000</code> by default</li>
+              <li>Create tables in your database (the AI needs schema context)</li>
+            </ol>
+
+            <h3>Basic Usage</h3>
+            <p>Once your proxy is running and you have tables, you can generate SQL from natural language:</p>
+            <pre><code><span class="comment">-- Create some tables first</span>
+<span class="keyword">CREATE TABLE</span> users (id <span class="keyword">INTEGER</span>, name <span class="keyword">VARCHAR</span>, email <span class="keyword">VARCHAR</span>);
+<span class="keyword">CREATE TABLE</span> orders (id <span class="keyword">INTEGER</span>, user_id <span class="keyword">INTEGER</span>, total <span class="keyword">DECIMAL</span>);
+
+<span class="comment">-- Generate SQL from natural language</span>
+.ai show all users
+
+<span class="comment">-- Or use the explicit query subcommand</span>
+.ai query find orders over 100 dollars</code></pre>
+            <p>The generated SQL is displayed with syntax highlighting and then executed automatically.</p>
+
+            <h3>AI Commands</h3>
+            <table>
+              <thead>
+                <tr><th>Command</th><th>Description</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>.ai &lt;question&gt;</code></td><td>Generate SQL from natural language (shorthand)</td></tr>
+                <tr><td><code>.ai query &lt;question&gt;</code></td><td>Generate SQL from natural language</td></tr>
+                <tr><td><code>.ai provider list</code></td><td>List available AI providers from the proxy</td></tr>
+                <tr><td><code>.ai provider set &lt;name&gt;</code></td><td>Set the AI provider (e.g., <code>claude</code>, <code>openai</code>)</td></tr>
+                <tr><td><code>.ai endpoint get</code></td><td>Show current proxy endpoint URL</td></tr>
+                <tr><td><code>.ai endpoint set &lt;url&gt;</code></td><td>Change the proxy endpoint URL</td></tr>
+              </tbody>
+            </table>
+
+            <h3>Configuration</h3>
+            <p>AI settings are persisted in localStorage across sessions:</p>
+            <pre><code><span class="comment">-- Check current endpoint</span>
+.ai endpoint get
+
+<span class="comment">-- Change to a different proxy</span>
+.ai endpoint set http://my-proxy:8000
+
+<span class="comment">-- List available providers</span>
+.ai provider list
+
+<span class="comment">-- Switch provider</span>
+.ai provider set openai</code></pre>
+
+            <div class="info-box">
+              <p><strong>Default Settings:</strong></p>
+              <ul>
+                <li><strong>Endpoint:</strong> <code>http://localhost:4000</code></li>
+                <li><strong>Provider:</strong> <code>claude</code></li>
+              </ul>
+            </div>
+
+            <h3>Requirements &amp; Error Messages</h3>
+            <ul>
+              <li><strong>Tables required:</strong> The AI needs schema context to generate meaningful SQL. If no tables exist, you'll see: <em>"Please create tables or views to be able to use the Text-to-SQL features"</em></li>
+              <li><strong>Proxy required:</strong> The text-to-sql proxy must be running and accessible. If unavailable, you'll see: <em>"Please install and run the Text-to-SQL Proxy"</em></li>
             </ul>
           </section>
 

@@ -26,6 +26,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 - **Persistent Storage** - Optional OPFS storage for data persistence
 - **Interactive Charts** - Visualize query results with auto-detected chart types (line, bar, scatter, histogram)
 - **Query Sharing** - Share SQL queries via URL for collaboration
+- **AI-Powered SQL** - Generate SQL from natural language using a text-to-sql proxy
 
 ## Architecture
 
@@ -154,6 +155,12 @@ interface TerminalConfig {
 
 | Command | Description |
 |---------|-------------|
+| `.ai <question>` | Generate SQL from natural language (shorthand) |
+| `.ai query <question>` | Generate SQL from natural language |
+| `.ai provider list` | List available AI providers |
+| `.ai provider set <name>` | Set the AI provider |
+| `.ai endpoint get` | Show current proxy endpoint |
+| `.ai endpoint set <url>` | Set proxy endpoint URL |
 | `.chart [options]` | Show interactive chart of last query result |
 | `.clear` | Clear the terminal |
 | `.clearhistory` | Clear command history |
@@ -310,6 +317,71 @@ https://terminal.sql-workbench.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2,
 | `↑` / `↓` | Navigate query list |
 | `Enter` | Copy shareable link |
 | `Escape` | Close modal |
+
+## AI-Powered SQL Generation
+
+Generate SQL queries from natural language using a text-to-sql proxy. This feature requires running the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy) locally or on a server.
+
+### Setup
+
+1. Install and run the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy)
+2. The proxy runs on `http://localhost:4000` by default
+3. Create tables in your database (the AI needs schema context)
+
+### Basic Usage
+
+```sql
+-- Create some tables first
+CREATE TABLE users (id INTEGER, name VARCHAR, email VARCHAR);
+CREATE TABLE orders (id INTEGER, user_id INTEGER, total DECIMAL, created_at DATE);
+
+-- Generate SQL from natural language
+.ai show all users
+
+-- Or use the explicit query subcommand
+.ai query find orders over 100 dollars from last month
+```
+
+The generated SQL is displayed with syntax highlighting and then executed automatically.
+
+### AI Commands
+
+| Command | Description |
+|---------|-------------|
+| `.ai <question>` | Generate SQL from natural language (shorthand) |
+| `.ai query <question>` | Generate SQL from natural language |
+| `.ai provider list` | List available AI providers from the proxy |
+| `.ai provider set <name>` | Set the AI provider (e.g., `claude`, `openai`) |
+| `.ai endpoint get` | Show current proxy endpoint URL |
+| `.ai endpoint set <url>` | Change the proxy endpoint URL |
+
+### Configuration
+
+Settings are persisted in localStorage:
+
+- **Endpoint**: Default is `http://localhost:4000`
+- **Provider**: Default is `claude`
+
+```sql
+-- Check current endpoint
+.ai endpoint get
+
+-- Change to a different proxy
+.ai endpoint set http://my-proxy:8000
+
+-- List available providers
+.ai provider list
+
+-- Switch provider
+.ai provider set openai
+```
+
+### Requirements
+
+- Tables or views must exist in the database for the AI to generate meaningful SQL
+- The text-to-sql proxy must be running and accessible
+- If no tables exist, you'll see: `"Please create tables or views to be able to use the Text-to-SQL features"`
+- If the proxy is unavailable, you'll see: `"Please install and run the Text-to-SQL Proxy"`
 
 ## Keyboard Shortcuts
 
