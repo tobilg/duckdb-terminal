@@ -1723,12 +1723,12 @@
             <h2>AI-Powered SQL Generation</h2>
             <p>Generate SQL queries from natural language using a text-to-sql proxy. This feature requires running the <a href="https://github.com/tobilg/text-to-sql-proxy" target="_blank" rel="noopener">Text-to-SQL Proxy</a> locally or on a server.</p>
 
-            <h3>Setup</h3>
-            <ol>
-              <li>Install and run the <a href="https://github.com/tobilg/text-to-sql-proxy" target="_blank" rel="noopener">Text-to-SQL Proxy</a></li>
-              <li>The proxy runs on <code>http://localhost:4000</code> by default</li>
-              <li>Create tables in your database (the AI needs schema context)</li>
-            </ol>
+            <h3>Running the Text-to-SQL Proxy</h3>
+            <p>Download precompiled binaries from the <a href="https://github.com/tobilg/text-to-sql-proxy/releases" target="_blank" rel="noopener">releases page</a> for your platform (Linux, macOS, Windows).</p>
+            <pre><code><span class="comment"># Download and extract the binary for your platform, then run:</span>
+./text-to-sql-proxy
+</code></pre>
+            <p>The proxy starts on <code>http://localhost:4000</code> by default. See the <a href="https://github.com/tobilg/text-to-sql-proxy#running-the-proxy" target="_blank" rel="noopener">proxy documentation</a> for more configuration options. Depending on the browser, you have to either set some configuration options or use create self-signed certificates for localhost.</p>
 
             <h3>Basic Usage</h3>
             <p>Once your proxy is running and you have tables, you can generate SQL from natural language:</p>

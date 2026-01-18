@@ -322,9 +322,26 @@ https://terminal.sql-workbench.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2,
 
 Generate SQL queries from natural language using a text-to-sql proxy. This feature requires running the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy) locally or on a server.
 
+### Running the Text-to-SQL Proxy
+
+Download precompiled binaries from the [releases page](https://github.com/tobilg/text-to-sql-proxy/releases) for your platform (Linux, macOS, Windows).
+
+**Quick start:**
+
+```bash
+# Download and extract the binary for your platform, then run:
+./text-to-sql-proxy
+
+# Or with a specific provider API key:
+ANTHROPIC_API_KEY=your-key ./text-to-sql-proxy
+OPENAI_API_KEY=your-key ./text-to-sql-proxy
+```
+
+The proxy starts on `http://localhost:4000` by default. See the [proxy documentation](https://github.com/tobilg/text-to-sql-proxy#running-the-proxy) for more configuration options.
+
 ### Setup
 
-1. Install and run the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy)
+1. Download and run the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy/releases)
 2. The proxy runs on `http://localhost:4000` by default
 3. Create tables in your database (the AI needs schema context)
 
