@@ -32,6 +32,18 @@ import type {
   TerminalEventListener,
 } from './types';
 import { saveTheme, getSavedTheme, getTheme } from './themes';
+import {
+  getAISettings,
+  saveAISettings,
+  getDefaultEndpoint,
+  getDefaultProvider,
+} from './utils/ai-settings';
+import {
+  checkProxyAvailable,
+  fetchProviders,
+  generateSQL,
+  AIClientError,
+} from './utils/ai-client';
 
 /** Default primary prompt displayed before each command */
 const DEFAULT_PROMPT = '🦆 ';
@@ -142,6 +154,11 @@ export class DuckDBTerminal implements TerminalInterface {
 
   // Cleanup function for drag-and-drop
   private dragDropCleanup: (() => void) | null = null;
+
+  // AI settings (lazy-loaded to avoid localStorage access on construction)
+  private aiSettingsLoaded = false;
+  private aiEndpoint: string = 'http://localhost:4000';
+  private aiProvider: string = 'claude';
 
   constructor(config: TerminalConfig) {
     this.config = config;
@@ -787,6 +804,13 @@ export class DuckDBTerminal implements TerminalInterface {
       name: '.share',
       description: 'Open sharing modal to share queries',
       handler: () => this.openSharingModal(),
+    });
+
+    this.commands.set('.ai', {
+      name: '.ai',
+      description: 'AI-powered natural language to SQL',
+      usage: '.ai query <question> | .ai provider list|set <name> | .ai endpoint get|set <url>',
+      handler: (args) => this.cmdAI(args),
     });
   }
 
@@ -2200,6 +2224,326 @@ export class DuckDBTerminal implements TerminalInterface {
     // Only show prompt if not in a special state
     if (this.state !== 'paginating' && this.state !== 'executing') {
       this.showPrompt();
+    }
+  }
+
+  // ==================== AI Commands ====================
+
+  /**
+   * Loads AI settings from localStorage on first use.
+   */
+  private loadAISettings(): void {
+    if (!this.aiSettingsLoaded) {
+      const settings = getAISettings();
+      this.aiEndpoint = settings.endpoint;
+      this.aiProvider = settings.provider;
+      this.aiSettingsLoaded = true;
+    }
+  }
+
+  /**
+   * Main handler for the .ai command.
+   * Routes to subcommand handlers based on the first argument.
+   */
+  private async cmdAI(args: string[]): Promise<void> {
+    this.loadAISettings();
+
+    if (args.length === 0) {
+      this.showAIHelp();
+      return;
+    }
+
+    const subcommand = args[0].toLowerCase();
+
+    switch (subcommand) {
+      case 'query':
+        await this.cmdAIQuery(args.slice(1));
+        break;
+      case 'provider':
+        await this.cmdAIProvider(args.slice(1));
+        break;
+      case 'endpoint':
+        this.cmdAIEndpoint(args.slice(1));
+        break;
+      default:
+        // Treat everything as a query if it doesn't match a subcommand
+        await this.cmdAIQuery(args);
+        break;
+    }
+  }
+
+  /**
+   * Shows help for AI commands.
+   */
+  private showAIHelp(): void {
+    this.writeln(vt100.bold('AI Commands:'));
+    this.writeln('');
+    this.writeln(`  ${vt100.colorize('.ai <question>', vt100.FG_CYAN)}`);
+    this.writeln('    Generate SQL from natural language question (shorthand)');
+    this.writeln('');
+    this.writeln(`  ${vt100.colorize('.ai query <question>', vt100.FG_CYAN)}`);
+    this.writeln('    Generate SQL from natural language question');
+    this.writeln('');
+    this.writeln(`  ${vt100.colorize('.ai provider list', vt100.FG_CYAN)}`);
+    this.writeln('    List available AI providers');
+    this.writeln('');
+    this.writeln(`  ${vt100.colorize('.ai provider set <name>', vt100.FG_CYAN)}`);
+    this.writeln('    Set the AI provider to use');
+    this.writeln('');
+    this.writeln(`  ${vt100.colorize('.ai endpoint get', vt100.FG_CYAN)}`);
+    this.writeln('    Show current proxy endpoint');
+    this.writeln('');
+    this.writeln(`  ${vt100.colorize('.ai endpoint set <url>', vt100.FG_CYAN)}`);
+    this.writeln('    Set the proxy endpoint URL');
+  }
+
+  /**
+   * Shows the proxy unavailable error message.
+   */
+  private showProxyUnavailableError(): void {
+    this.writeln(
+      vt100.colorize(
+        'Please install and run the Text-to-SQL Proxy, see https://github.com/tobilg/text-to-sql-proxy',
+        vt100.FG_RED
+      )
+    );
+  }
+
+  /**
+   * Handles the .ai query subcommand.
+   * Generates SQL from a natural language question.
+   */
+  private async cmdAIQuery(args: string[]): Promise<void> {
+    if (args.length === 0) {
+      this.writeln(vt100.colorize('Error: Please provide a question', vt100.FG_RED));
+      this.writeln('Usage: .ai query <your question>');
+      return;
+    }
+
+    const question = args.join(' ');
+
+    // Check if proxy is available
+    const proxyAvailable = await checkProxyAvailable(this.aiEndpoint);
+    if (!proxyAvailable) {
+      this.showProxyUnavailableError();
+      return;
+    }
+
+    // Get DDL from database
+    const ddl = await this.database.getAllDDL();
+
+    if (!ddl) {
+      this.writeln(
+        vt100.colorize(
+          'Please create tables or views to be able to use the Text-to-SQL features',
+          vt100.FG_YELLOW
+        )
+      );
+      return;
+    }
+
+    this.writeln(vt100.dim('Generating SQL...'));
+
+    try {
+      const sql = await generateSQL(
+        this.aiEndpoint,
+        ddl,
+        question,
+        this.aiProvider
+      );
+
+      // Split SQL into lines for multi-line display with continuation prompts
+      const lines = sql.trim().split('\n');
+
+      // Show the SQL in the prompt as if the user typed it
+      this.writeln('');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const promptText = i === 0 ? this.prompt : this.continuationPrompt;
+        this.write(promptText);
+        const highlighted = await this.getHighlightedSQLAsync(line);
+        this.write(highlighted);
+        this.writeln('');
+      }
+
+      // Flatten SQL for history (easier to re-execute)
+      const flattenedSQL = sql.replace(/\s*\n\s*/g, ' ').replace(/\s+/g, ' ').trim();
+
+      // Add to history
+      await this.history.add(flattenedSQL);
+
+      // Execute the generated SQL
+      this.writeln('');
+      await this.executeSQLInternal(sql.trim());
+    } catch (error) {
+      if (error instanceof AIClientError) {
+        this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
+      } else {
+        this.writeln(
+          vt100.colorize(
+            `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            vt100.FG_RED
+          )
+        );
+      }
+    }
+  }
+
+  /**
+   * Handles the .ai provider subcommand.
+   * Lists or sets the AI provider.
+   */
+  private async cmdAIProvider(args: string[]): Promise<void> {
+    if (args.length === 0) {
+      // Show current provider
+      this.writeln(`Current provider: ${this.aiProvider}`);
+      return;
+    }
+
+    const action = args[0].toLowerCase();
+
+    if (action === 'list') {
+      // Check if proxy is available
+      const proxyAvailable = await checkProxyAvailable(this.aiEndpoint);
+      if (!proxyAvailable) {
+        this.showProxyUnavailableError();
+        return;
+      }
+
+      this.writeln(vt100.dim('Fetching providers...'));
+
+      try {
+        const providers = await fetchProviders(this.aiEndpoint);
+
+        if (providers.length === 0) {
+          this.writeln(vt100.dim('No providers available'));
+          return;
+        }
+
+        this.writeln('');
+        this.writeln(vt100.bold('Available providers:'));
+        for (const provider of providers) {
+          const isCurrent = provider.name === this.aiProvider;
+          const marker = isCurrent ? vt100.colorize(' (current)', vt100.FG_GREEN) : '';
+          this.writeln(`  ${vt100.colorize(provider.name, vt100.FG_CYAN)}${marker}`);
+          if (provider.description) {
+            this.writeln(`    ${vt100.dim(provider.description)}`);
+          }
+        }
+      } catch (error) {
+        if (error instanceof AIClientError) {
+          this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
+        } else {
+          this.writeln(
+            vt100.colorize(
+              `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              vt100.FG_RED
+            )
+          );
+        }
+      }
+    } else if (action === 'set') {
+      const providerName = args.slice(1).join(' ');
+
+      if (!providerName) {
+        this.writeln(vt100.colorize('Error: Please provide a provider name', vt100.FG_RED));
+        this.writeln('Usage: .ai provider set <name>');
+        return;
+      }
+
+      // Check if proxy is available
+      const proxyAvailable = await checkProxyAvailable(this.aiEndpoint);
+      if (!proxyAvailable) {
+        this.showProxyUnavailableError();
+        return;
+      }
+
+      // Validate provider exists
+      try {
+        const providers = await fetchProviders(this.aiEndpoint);
+        const provider = providers.find(
+          (p) => p.name.toLowerCase() === providerName.toLowerCase()
+        );
+
+        if (!provider) {
+          this.writeln(vt100.colorize(`Error: Provider "${providerName}" not found`, vt100.FG_RED));
+          this.writeln('Use .ai provider list to see available providers');
+          return;
+        }
+
+        this.aiProvider = provider.name;
+        saveAISettings({ provider: this.aiProvider });
+        this.writeln(vt100.colorize(`Provider set to: ${this.aiProvider}`, vt100.FG_GREEN));
+      } catch (error) {
+        if (error instanceof AIClientError) {
+          this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
+        } else {
+          this.writeln(
+            vt100.colorize(
+              `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              vt100.FG_RED
+            )
+          );
+        }
+      }
+    } else if (action === 'clear' || action === 'reset') {
+      const defaultProvider = getDefaultProvider();
+      this.aiProvider = defaultProvider;
+      saveAISettings({ provider: defaultProvider });
+      this.writeln(vt100.colorize(`Provider reset to default: ${defaultProvider}`, vt100.FG_GREEN));
+    } else {
+      this.writeln(vt100.colorize(`Unknown action: ${action}`, vt100.FG_RED));
+      this.writeln('Usage: .ai provider list|set <name>|clear');
+    }
+  }
+
+  /**
+   * Handles the .ai endpoint subcommand.
+   * Gets or sets the proxy endpoint URL.
+   */
+  private cmdAIEndpoint(args: string[]): void {
+    if (args.length === 0) {
+      // Show current endpoint
+      this.writeln(`Current endpoint: ${this.aiEndpoint}`);
+      return;
+    }
+
+    const action = args[0].toLowerCase();
+
+    if (action === 'get') {
+      this.writeln(`Endpoint: ${this.aiEndpoint}`);
+      const defaultEndpoint = getDefaultEndpoint();
+      if (this.aiEndpoint !== defaultEndpoint) {
+        this.writeln(vt100.dim(`Default: ${defaultEndpoint}`));
+      }
+    } else if (action === 'set') {
+      const url = args.slice(1).join(' ');
+
+      if (!url) {
+        this.writeln(vt100.colorize('Error: Please provide an endpoint URL', vt100.FG_RED));
+        this.writeln('Usage: .ai endpoint set <url>');
+        return;
+      }
+
+      // Basic URL validation
+      try {
+        new URL(url);
+      } catch {
+        this.writeln(vt100.colorize('Error: Invalid URL format', vt100.FG_RED));
+        return;
+      }
+
+      this.aiEndpoint = url;
+      saveAISettings({ endpoint: url });
+      this.writeln(vt100.colorize(`Endpoint set to: ${url}`, vt100.FG_GREEN));
+    } else if (action === 'reset') {
+      const defaultEndpoint = getDefaultEndpoint();
+      this.aiEndpoint = defaultEndpoint;
+      saveAISettings({ endpoint: defaultEndpoint });
+      this.writeln(vt100.colorize(`Endpoint reset to: ${defaultEndpoint}`, vt100.FG_GREEN));
+    } else {
+      this.writeln(vt100.colorize(`Unknown action: ${action}`, vt100.FG_RED));
+      this.writeln('Usage: .ai endpoint get|set <url>|reset');
     }
   }
 }

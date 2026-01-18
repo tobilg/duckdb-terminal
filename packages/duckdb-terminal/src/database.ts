@@ -503,10 +503,30 @@ export class Database {
     }
 
     try {
-      // Escape single quotes in table name to prevent SQL injection
-      const escapedTableName = tableName.replace(/'/g, "''");
+      // Parse qualified table name (catalog.schema.table, schema.table, or just table)
+      const parts = tableName.split('.');
+      let whereClause: string;
+
+      if (parts.length === 3) {
+        // catalog.schema.table
+        const catalog = parts[0].replace(/'/g, "''");
+        const schema = parts[1].replace(/'/g, "''");
+        const table = parts[2].replace(/'/g, "''");
+        whereClause = `table_catalog = '${catalog}' AND table_schema = '${schema}' AND table_name = '${table}'`;
+      } else if (parts.length === 2) {
+        // Could be catalog.table (with main schema) or schema.table (with default catalog)
+        // Try to match either way
+        const first = parts[0].replace(/'/g, "''");
+        const second = parts[1].replace(/'/g, "''");
+        whereClause = `((table_catalog = '${first}' AND table_name = '${second}') OR (table_schema = '${first}' AND table_name = '${second}'))`;
+      } else {
+        // Just table name
+        const table = tableName.replace(/'/g, "''");
+        whereClause = `table_name = '${table}'`;
+      }
+
       const result = await this.executeQuery(
-        `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '${escapedTableName}' ORDER BY ordinal_position`
+        `SELECT column_name, data_type FROM information_schema.columns WHERE ${whereClause} ORDER BY ordinal_position`
       );
       return result.rows.map((row) => ({
         name: String(row[0]),
@@ -514,6 +534,50 @@ export class Database {
       }));
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Gets CREATE TABLE statements for all tables and views in the database.
+   *
+   * This method queries the database catalog and generates DDL statements
+   * that describe the schema, useful for providing context to AI assistants.
+   *
+   * @returns A promise that resolves to a string containing all CREATE TABLE statements,
+   *          or an empty string if no tables exist
+   *
+   * @example
+   * ```typescript
+   * const ddl = await db.getAllDDL();
+   * console.log(ddl);
+   * // CREATE TABLE users (id INTEGER, name VARCHAR, email VARCHAR);
+   * // CREATE TABLE orders (id INTEGER, user_id INTEGER, total DECIMAL);
+   * ```
+   */
+  async getAllDDL(): Promise<string> {
+    if (!this.conn) {
+      return '';
+    }
+
+    try {
+      const tables = await this.getTables();
+      if (tables.length === 0) {
+        return '';
+      }
+
+      const ddlStatements: string[] = [];
+
+      for (const tableName of tables) {
+        const schema = await this.getTableSchema(tableName);
+        if (schema.length > 0) {
+          const columns = schema.map((col) => `${col.name} ${col.type}`).join(', ');
+          ddlStatements.push(`CREATE TABLE ${tableName} (${columns});`);
+        }
+      }
+
+      return ddlStatements.join('\n');
+    } catch {
+      return '';
     }
   }
 

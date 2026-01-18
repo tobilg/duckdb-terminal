@@ -186,3 +186,20 @@ export type {
   SharingModalConfig,
   ShareableURLResult,
 } from './sharing';
+
+// Export AI utilities
+export {
+  getAISettings,
+  saveAISettings,
+  getDefaultEndpoint,
+  getDefaultProvider,
+  clearAISettings,
+  type AISettings,
+  type AIProvider,
+} from './utils/ai-settings';
+export {
+  checkProxyAvailable,
+  fetchProviders,
+  generateSQL,
+  AIClientError,
+} from './utils/ai-client';
