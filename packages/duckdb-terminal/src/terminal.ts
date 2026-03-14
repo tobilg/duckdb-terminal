@@ -1145,8 +1145,13 @@ export class DuckDBTerminal implements TerminalInterface {
     // Check for dot command
     if (input.trim().startsWith('.') && this.state !== 'collecting') {
       this.writeln(''); // Add spacing before command output
-      await this.history.add(input.trim());
+      // Start history save without awaiting to preserve user activation context.
+      // Safari requires input.click() (used by .open file picker) to be called
+      // synchronously within the user gesture — awaiting history.add() first
+      // breaks the transient activation chain and Safari silently blocks the dialog.
+      const historyPromise = this.history.add(input.trim());
       await this.executeCommand(input.trim());
+      await historyPromise;
       this.inputBuffer.clear();
       this.writeln(''); // Add spacing after command output
       this.showPrompt();

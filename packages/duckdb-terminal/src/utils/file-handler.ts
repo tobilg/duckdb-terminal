@@ -47,19 +47,45 @@ export async function pickFiles(options?: {
   accept?: string;
 }): Promise<File[]> {
   return new Promise((resolve) => {
+    let resolved = false;
+    const done = (files: File[]) => {
+      if (resolved) return;
+      resolved = true;
+      input.remove();
+      resolve(files);
+    };
+
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = options?.multiple ?? true;
     input.accept = options?.accept ?? '.csv,.parquet,.json,.db,.duckdb';
+    // Hide the element but keep it in the DOM — Safari may ignore .click()
+    // on detached file inputs, especially on iOS.
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
 
     input.onchange = () => {
-      const files = Array.from(input.files ?? []);
-      resolve(files);
+      done(Array.from(input.files ?? []));
     };
 
+    // The cancel event is supported in Safari 17.4+. For older versions,
+    // fall back to detecting when the window regains focus after the picker
+    // closes without a selection.
     input.oncancel = () => {
-      resolve([]);
+      done([]);
     };
+
+    const onFocusBack = () => {
+      // Delay slightly — the change event fires after focus returns
+      setTimeout(() => {
+        if (!resolved) {
+          done([]);
+        }
+      }, 300);
+    };
+    window.addEventListener('focus', onFocusBack, { once: true });
 
     input.click();
   });
