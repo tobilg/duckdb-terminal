@@ -3,7 +3,7 @@
 A browser-based SQL Terminal for [DuckDB](https://duckdb.org/) powered by [Ghostty](https://ghostty.org/) terminal emulator.
 
 ## Try it live
-The latest version is always deployed to [https://terminal.sql-workbench.com](https://terminal.sql-workbench.com).
+The latest version is always deployed to [https://duckdb-terminal.com](https://duckdb-terminal.com).
 
 ## API Docs
 The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-terminal](https://tobilg.github.io/duckdb-terminal/).
@@ -302,7 +302,7 @@ Share SQL queries via URL to collaborate with others. When someone opens a share
 
 Shared URLs use a hash-based format:
 ```
-https://terminal.sql-workbench.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2,...
+https://duckdb-terminal.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2,...
 ```
 
 - Each query is URL-safe Base64 encoded
