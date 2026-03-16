@@ -15,7 +15,7 @@
     "test:coverage": "npm run test:coverage -w duckdb-terminal",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "generate-docs": "npm run generate-docs -w duckdb-terminal",
-    "deploy": "npm run build:website && wrangler pages deploy packages/website/dist"
+    "deploy": "npm run build && wrangler pages deploy packages/website/dist"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
