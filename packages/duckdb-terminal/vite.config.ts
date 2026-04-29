@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import { resolve, dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';

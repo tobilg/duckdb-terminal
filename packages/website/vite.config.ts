@@ -42,9 +42,11 @@ export default defineConfig({
         paths: {
           'ghostty-web': `https://cdn.jsdelivr.net/npm/ghostty-web@${ghosttyPkg.version}/dist/ghostty-web.js`,
         },
-        manualChunks: {
-          // Separate DuckDB WASM into its own chunk
-          duckdb: ['@duckdb/duckdb-wasm'],
+        manualChunks(id) {
+          // Separate DuckDB WASM into its own chunk.
+          if (id.includes('@duckdb/duckdb-wasm')) {
+            return 'duckdb';
+          }
         },
       },
     },

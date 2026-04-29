@@ -18,6 +18,6 @@
     "deploy": "npm run build && wrangler pages deploy packages/website/dist"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }
