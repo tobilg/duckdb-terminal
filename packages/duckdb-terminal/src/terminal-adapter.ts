@@ -83,6 +83,7 @@ export class TerminalAdapter {
   private options: TerminalOptions = {};
   private resizeObserver: ResizeObserver | null = null;
   private mobileInput: HTMLTextAreaElement | null = null;
+  private keyboardHandler: ((event: KeyboardEvent) => void) | null = null;
 
   /**
    * Initializes the Ghostty terminal and mounts it to the container.
@@ -185,9 +186,7 @@ export class TerminalAdapter {
       this.resizeHandler?.(cols, rows);
     });
 
-    // Set up Safari clipboard workaround
-    // Safari requires clipboard operations to happen synchronously within a user gesture
-    this.setupSafariClipboardWorkaround();
+    this.setupKeyboardShortcuts();
 
     // Set up mobile keyboard input helper
     this.setupMobileInput();
@@ -202,23 +201,68 @@ export class TerminalAdapter {
    *
    * @internal
    */
-  private setupSafariClipboardWorkaround(): void {
-    if (!this.terminal) return;
+  private setupKeyboardShortcuts(): void {
+    this.removeKeyboardShortcuts();
 
-    // Use attachCustomKeyEventHandler to intercept Cmd+C
-    (this.terminal as any).attachCustomKeyEventHandler?.((event: KeyboardEvent) => {
-      // Only handle Cmd+C (Mac) - Ctrl+C should still send interrupt
-      if (event.metaKey && event.code === 'KeyC' && event.type === 'keydown') {
-        // Check if there's a selection in the terminal
+    this.keyboardHandler = (event: KeyboardEvent) => {
+      if (event.type !== 'keydown') {
+        return;
+      }
+
+      const sequence = this.getNavigationSequence(event);
+      if (sequence) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.dataHandler?.(sequence);
+        return;
+      }
+
+      // Safari clipboard workaround: Cmd+C must copy synchronously during the key event.
+      // Ctrl+C still passes through to the terminal as interrupt.
+      if (event.metaKey && event.code === 'KeyC') {
         const selection = (this.terminal as any).getSelection?.() as string | undefined;
         if (selection && selection.length > 0) {
-          // Copy using synchronous execCommand (works in Safari)
+          event.preventDefault();
+          event.stopPropagation();
           this.copyToClipboardSync(selection);
-          return true; // Prevent default handling
         }
       }
-      return false; // Let other keys pass through
-    });
+    };
+
+    this.container?.addEventListener('keydown', this.keyboardHandler, true);
+  }
+
+  private removeKeyboardShortcuts(): void {
+    if (this.keyboardHandler) {
+      this.container?.removeEventListener('keydown', this.keyboardHandler, true);
+      this.keyboardHandler = null;
+    }
+  }
+
+  private getNavigationSequence(event: KeyboardEvent): string | null {
+    if (event.isComposing) {
+      return null;
+    }
+
+    if (event.key === 'Home' || (event.metaKey && event.key === 'ArrowLeft')) {
+      return '\x1b[H';
+    }
+
+    if (event.key === 'End' || (event.metaKey && event.key === 'ArrowRight')) {
+      return '\x1b[F';
+    }
+
+    if (!event.metaKey && (event.altKey || event.ctrlKey)) {
+      if (event.key === 'ArrowLeft') {
+        return '\x1bb';
+      }
+
+      if (event.key === 'ArrowRight') {
+        return '\x1bf';
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -359,10 +403,16 @@ export class TerminalAdapter {
         this.dataHandler?.('\x1b[B');
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        this.dataHandler?.('\x1b[D');
+        this.dataHandler?.((e.altKey || e.ctrlKey) ? '\x1bb' : '\x1b[D');
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        this.dataHandler?.('\x1b[C');
+        this.dataHandler?.((e.altKey || e.ctrlKey) ? '\x1bf' : '\x1b[C');
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        this.dataHandler?.('\x1b[H');
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        this.dataHandler?.('\x1b[F');
       }
     });
 
@@ -642,6 +692,7 @@ export class TerminalAdapter {
 
     // Dispose the old terminal
     window.removeEventListener('resize', this.handleResize);
+    this.removeKeyboardShortcuts();
     this.terminal?.dispose();
 
     // Recreate the terminal with the new theme
@@ -672,6 +723,7 @@ export class TerminalAdapter {
    */
   dispose(): void {
     window.removeEventListener('resize', this.handleResize);
+    this.removeKeyboardShortcuts();
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.mobileInput?.remove();

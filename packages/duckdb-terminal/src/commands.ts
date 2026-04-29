@@ -209,11 +209,22 @@ function cmdHelp(commands: Map<string, Command>, ctx: CommandContext): void {
   ctx.writeln(vt100.bold('Available commands:'));
   ctx.writeln('');
   for (const cmd of commands.values()) {
-    const usage = cmd.usage ? `  ${vt100.dim(cmd.usage)}` : '';
+    const usageText = formatHelpUsage(cmd);
+    const usage = usageText ? `  ${vt100.dim(usageText)}` : '';
     ctx.writeln(`  ${vt100.colorize(cmd.name, vt100.FG_CYAN)}  ${cmd.description}${usage}`);
   }
   ctx.writeln('');
   ctx.writeln('SQL statements must end with a semicolon (;)');
+}
+
+function formatHelpUsage(cmd: Command): string {
+  if (!cmd.usage) {
+    return '';
+  }
+  const commandPrefix = `${cmd.name} `;
+  return cmd.usage.startsWith(commandPrefix)
+    ? cmd.usage.slice(commandPrefix.length)
+    : cmd.usage;
 }
 
 async function cmdTables(ctx: CommandContext): Promise<void> {

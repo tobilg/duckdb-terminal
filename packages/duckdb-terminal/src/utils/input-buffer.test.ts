@@ -81,6 +81,49 @@ describe('InputBuffer', () => {
       buffer.moveToEnd();
       expect(buffer.getCursorPos()).toBe(5);
     });
+
+    it('should move to the previous word', () => {
+      buffer.setContent('SELECT * FROM users');
+
+      buffer.moveWordLeft();
+
+      expect(buffer.getCursorPos()).toBe('SELECT * FROM '.length);
+    });
+
+    it('should skip separators when moving to the previous word', () => {
+      buffer.setContent('SELECT * FROM users   ');
+
+      buffer.moveWordLeft();
+
+      expect(buffer.getCursorPos()).toBe('SELECT * FROM '.length);
+    });
+
+    it('should move to the next word', () => {
+      buffer.setContent('SELECT * FROM users');
+      buffer.moveToStart();
+
+      buffer.moveWordRight();
+
+      expect(buffer.getCursorPos()).toBe('SELECT'.length);
+    });
+
+    it('should skip separators when moving to the next word', () => {
+      buffer.setContent('SELECT * FROM users');
+      buffer.moveToStart();
+      buffer.moveWordRight();
+
+      buffer.moveWordRight();
+
+      expect(buffer.getCursorPos()).toBe('SELECT * FROM'.length);
+    });
+
+    it('should treat punctuation as a word boundary', () => {
+      buffer.setContent('schema.table');
+
+      buffer.moveWordLeft();
+
+      expect(buffer.getCursorPos()).toBe('schema.'.length);
+    });
   });
 
   describe('insert in middle', () => {

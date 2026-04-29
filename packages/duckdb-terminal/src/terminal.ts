@@ -923,7 +923,7 @@ export class DuckDBTerminal implements TerminalInterface {
     }
 
     // Check for escape sequences first
-    if (data.startsWith('\x1b[')) {
+    if (data.startsWith('\x1b')) {
       this.handleEscapeSequence(data);
       return;
     }
@@ -1097,7 +1097,7 @@ export class DuckDBTerminal implements TerminalInterface {
    * Processes VT100 escape sequences for special keys.
    *
    * Handles arrow keys (up/down for history, left/right for cursor),
-   * Home, End, and Delete keys.
+   * word navigation, Home, End, and Delete keys.
    *
    * @param seq - The escape sequence string (e.g., '\x1b[A' for Arrow Up)
    */
@@ -1116,13 +1116,37 @@ export class DuckDBTerminal implements TerminalInterface {
         this.write(this.inputBuffer.moveLeft());
         break;
       case '\x1b[H': // Home
+      case '\x1bOH': // Home (application cursor mode)
+      case '\x1b[1~': // Home (Linux console / rxvt)
+      case '\x1b[7~': // Home (rxvt)
         this.write(this.inputBuffer.moveToStart());
         break;
       case '\x1b[F': // End
+      case '\x1bOF': // End (application cursor mode)
+      case '\x1b[4~': // End (Linux console / rxvt)
+      case '\x1b[8~': // End (rxvt)
         this.write(this.inputBuffer.moveToEnd());
         break;
       case '\x1b[3~': // Delete
         this.write(this.inputBuffer.delete());
+        break;
+      case '\x1bb': // Alt/Option+B or Option+Left on macOS terminals
+      case '\x1b[1;3D': // Alt+Left
+      case '\x1b[1;5D': // Ctrl+Left
+      case '\x1b[1;7D': // Ctrl+Alt+Left
+      case '\x1b[1;9D': // Meta+Left
+      case '\x1b[3D': // Alt+Left variant
+      case '\x1b[5D': // Ctrl+Left variant
+        this.write(this.inputBuffer.moveWordLeft());
+        break;
+      case '\x1bf': // Alt/Option+F or Option+Right on macOS terminals
+      case '\x1b[1;3C': // Alt+Right
+      case '\x1b[1;5C': // Ctrl+Right
+      case '\x1b[1;7C': // Ctrl+Alt+Right
+      case '\x1b[1;9C': // Meta+Right
+      case '\x1b[3C': // Alt+Right variant
+      case '\x1b[5C': // Ctrl+Right variant
+        this.write(this.inputBuffer.moveWordRight());
         break;
     }
   }
@@ -1721,11 +1745,22 @@ export class DuckDBTerminal implements TerminalInterface {
     this.writeln('');
     const sortedCommands = [...this.commands.values()].sort((a, b) => a.name.localeCompare(b.name));
     for (const cmd of sortedCommands) {
-      const usage = cmd.usage ? `  ${vt100.dim(cmd.usage)}` : '';
+      const usageText = this.formatHelpUsage(cmd);
+      const usage = usageText ? `  ${vt100.dim(usageText)}` : '';
       this.writeln(`  ${vt100.colorize(cmd.name, vt100.FG_CYAN)}  ${cmd.description}${usage}`);
     }
     this.writeln('');
     this.writeln('SQL statements must end with a semicolon (;)');
+  }
+
+  private formatHelpUsage(cmd: Command): string {
+    if (!cmd.usage) {
+      return '';
+    }
+    const commandPrefix = `${cmd.name} `;
+    return cmd.usage.startsWith(commandPrefix)
+      ? cmd.usage.slice(commandPrefix.length)
+      : cmd.usage;
   }
 
   private async cmdTables(): Promise<void> {

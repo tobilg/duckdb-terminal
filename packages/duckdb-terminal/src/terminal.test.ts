@@ -69,6 +69,10 @@ vi.mock('./utils/history', () => ({
 import { DuckDBTerminal } from './terminal';
 import { darkTheme } from './themes';
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 describe('DuckDBTerminal Events', () => {
   let terminal: DuckDBTerminal;
   let container: HTMLElement;
@@ -268,6 +272,18 @@ describe('DuckDBTerminal Commands', () => {
       expect(output).toContain('.help');
       expect(output).toContain('.tables');
       expect(output).toContain('.schema');
+    });
+
+    it('should not repeat the command name in the .links usage text', async () => {
+      const cmd = (terminal as unknown as { commands: Map<string, { handler: (args: string[]) => Promise<void> }> }).commands;
+      await cmd.get('.help')?.handler([]);
+
+      const output = stripAnsi(mockWriteln.mock.calls.map(c => c[0]).join('\n'));
+      const linksLine = output.split('\n').find(line => line.includes('.links'));
+
+      expect(linksLine).toBeDefined();
+      expect(linksLine?.match(/\.links/g)).toHaveLength(1);
+      expect(linksLine).toContain('on|off');
     });
   });
 
@@ -550,6 +566,59 @@ describe('DuckDBTerminal Commands', () => {
       await cmd.get('.clear')?.handler([]);
 
       expect(clearSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('keyboard navigation', () => {
+    function getInternals() {
+      return terminal as unknown as {
+        inputBuffer: {
+          setContent: (content: string) => void;
+          getCursorPos: () => number;
+          moveToStart: () => string;
+        };
+        handleInput: (data: string) => void;
+      };
+    }
+
+    it('should handle Home and End sequence variants', () => {
+      const internals = getInternals();
+      internals.inputBuffer.setContent('SELECT 1');
+
+      internals.handleInput('\x1bOH');
+      expect(internals.inputBuffer.getCursorPos()).toBe(0);
+
+      internals.handleInput('\x1b[4~');
+      expect(internals.inputBuffer.getCursorPos()).toBe('SELECT 1'.length);
+
+      internals.handleInput('\x1b[1~');
+      expect(internals.inputBuffer.getCursorPos()).toBe(0);
+
+      internals.handleInput('\x1bOF');
+      expect(internals.inputBuffer.getCursorPos()).toBe('SELECT 1'.length);
+    });
+
+    it('should handle macOS Option word navigation sequences', () => {
+      const internals = getInternals();
+      internals.inputBuffer.setContent('SELECT * FROM users');
+
+      internals.handleInput('\x1bb');
+      expect(internals.inputBuffer.getCursorPos()).toBe('SELECT * FROM '.length);
+
+      internals.handleInput('\x1bf');
+      expect(internals.inputBuffer.getCursorPos()).toBe('SELECT * FROM users'.length);
+    });
+
+    it('should handle Linux and Windows word navigation sequences', () => {
+      const internals = getInternals();
+      internals.inputBuffer.setContent('SELECT * FROM users');
+
+      internals.handleInput('\x1b[1;5D');
+      expect(internals.inputBuffer.getCursorPos()).toBe('SELECT * FROM '.length);
+
+      internals.inputBuffer.moveToStart();
+      internals.handleInput('\x1b[1;3C');
+      expect(internals.inputBuffer.getCursorPos()).toBe('SELECT'.length);
     });
   });
 });

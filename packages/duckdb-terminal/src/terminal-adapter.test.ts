@@ -113,6 +113,70 @@ describe('TerminalAdapter', () => {
       // Handler should be registered
       expect(handler).not.toHaveBeenCalled();
     });
+
+    it('should emit word navigation for Option/Alt+Arrow keys', async () => {
+      const handler = vi.fn();
+      adapter.onData(handler);
+      await adapter.init(container);
+
+      container.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowLeft',
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+      container.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        altKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+
+      expect(handler).toHaveBeenNthCalledWith(1, '\x1bb');
+      expect(handler).toHaveBeenNthCalledWith(2, '\x1bf');
+    });
+
+    it('should emit word navigation for Ctrl+Arrow keys', async () => {
+      const handler = vi.fn();
+      adapter.onData(handler);
+      await adapter.init(container);
+
+      container.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowLeft',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+      container.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+
+      expect(handler).toHaveBeenNthCalledWith(1, '\x1bb');
+      expect(handler).toHaveBeenNthCalledWith(2, '\x1bf');
+    });
+
+    it('should emit line navigation for Home and End keys', async () => {
+      const handler = vi.fn();
+      adapter.onData(handler);
+      await adapter.init(container);
+
+      container.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Home',
+        bubbles: true,
+        cancelable: true,
+      }));
+      container.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'End',
+        bubbles: true,
+        cancelable: true,
+      }));
+
+      expect(handler).toHaveBeenNthCalledWith(1, '\x1b[H');
+      expect(handler).toHaveBeenNthCalledWith(2, '\x1b[F');
+    });
   });
 
   describe('theme', () => {

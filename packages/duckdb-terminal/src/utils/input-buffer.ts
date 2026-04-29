@@ -72,6 +72,10 @@ export class InputBuffer {
   private terminalWidth: number = 80;
   private promptLength: number = 0;
 
+  private isWordChar(char: string): boolean {
+    return /[A-Za-z0-9_]/.test(char);
+  }
+
   /**
    * Set the prompt length for cursor calculations.
    * This is needed to correctly calculate line wrapping since the prompt
@@ -188,6 +192,17 @@ export class InputBuffer {
     }
 
     return output;
+  }
+
+  private moveToBufferPosition(position: number): string {
+    const target = Math.max(0, Math.min(position, this.buffer.length));
+    if (target === this.cursorPos) {
+      return '';
+    }
+    const oldPos = this.getCursorPosition();
+    this.cursorPos = target;
+    const newPos = this.getCursorPosition();
+    return this.moveCursor(oldPos, newPos);
   }
 
   /**
@@ -455,6 +470,48 @@ export class InputBuffer {
       return this.moveCursor(oldPos, newPos);
     }
     return '';
+  }
+
+  /**
+   * Moves the cursor to the start of the previous word.
+   *
+   * This matches common Option/Alt/Ctrl+Left behavior: skip separators first,
+   * then move over the previous run of word characters.
+   *
+   * @returns VT100 escape sequence, or empty string if already at start
+   */
+  moveWordLeft(): string {
+    let target = this.cursorPos;
+
+    while (target > 0 && !this.isWordChar(this.buffer[target - 1])) {
+      target--;
+    }
+    while (target > 0 && this.isWordChar(this.buffer[target - 1])) {
+      target--;
+    }
+
+    return this.moveToBufferPosition(target);
+  }
+
+  /**
+   * Moves the cursor to the end of the next word.
+   *
+   * This matches common Option/Alt/Ctrl+Right behavior: skip separators first,
+   * then move over the next run of word characters.
+   *
+   * @returns VT100 escape sequence, or empty string if already at end
+   */
+  moveWordRight(): string {
+    let target = this.cursorPos;
+
+    while (target < this.buffer.length && !this.isWordChar(this.buffer[target])) {
+      target++;
+    }
+    while (target < this.buffer.length && this.isWordChar(this.buffer[target])) {
+      target++;
+    }
+
+    return this.moveToBufferPosition(target);
   }
 
   /**

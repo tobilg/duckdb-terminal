@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createCommands, type CommandContext } from './commands';
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 function createMockContext(): CommandContext & { mockWriteln: ReturnType<typeof vi.fn> } {
   const mockWriteln = vi.fn();
   return {
@@ -75,6 +79,18 @@ describe('Commands', () => {
       const output = ctx.mockWriteln.mock.calls.map((c: string[]) => c[0]).join('\n');
       expect(output).toContain('Available commands:');
       expect(output).toContain('.help');
+    });
+
+    it('should not repeat the command name in the .links usage text', async () => {
+      const commands = createCommands(ctx);
+      await commands.get('.help')?.handler([]);
+
+      const output = stripAnsi(ctx.mockWriteln.mock.calls.map((c: string[]) => c[0]).join('\n'));
+      const linksLine = output.split('\n').find(line => line.includes('.links'));
+
+      expect(linksLine).toBeDefined();
+      expect(linksLine?.match(/\.links/g)).toHaveLength(1);
+      expect(linksLine).toContain('on|off');
     });
   });
 
