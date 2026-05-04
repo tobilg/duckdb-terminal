@@ -651,7 +651,8 @@ export class TerminalAdapter {
    * @returns The current column count, or 80 if not initialized
    */
   get cols(): number {
-    return this.terminal?.cols ?? 80;
+    const proposed = this.fitAddon?.proposeDimensions?.();
+    return proposed?.cols ?? this.terminal?.cols ?? 80;
   }
 
   /**

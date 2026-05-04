@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { formatTable, formatCSV, formatJSON } from './table-formatter';
+import {
+  formatTable,
+  formatCSV,
+  formatCSVHeader,
+  formatCSVRow,
+  formatTSV,
+  formatTSVHeader,
+  formatTSVRow,
+  formatJSON,
+} from './table-formatter';
 
 describe('formatTable', () => {
   it('should format empty result', () => {
@@ -41,6 +50,49 @@ describe('formatTable', () => {
     expect(result).toContain('\u2026'); // ellipsis
     expect(result.length).toBeLessThan(longString.length * 2);
   });
+
+  it('should constrain table width when maxWidth is provided', () => {
+    const result = formatTable(
+      ['code', 'description'],
+      [['ATL', 'United States, Mexico, and Canada pricing region']],
+      { maxWidth: 40, maxColumnWidth: 80 }
+    );
+
+    for (const line of result.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(40);
+    }
+    expect(result).toContain('\u2026');
+  });
+
+  it('should render an optional column type row', () => {
+    const result = formatTable(
+      ['amount', 'name'],
+      [[123, 'Alice']],
+      { columnTypes: ['INTEGER', 'VARCHAR'], showTypes: true }
+    );
+    const lines = result.split('\n');
+
+    expect(lines[1]).toContain('amount');
+    expect(lines[2]).toContain('integer');
+    expect(lines[2]).toContain('varchar');
+    expect(lines[3]).toMatch(/^├/);
+  });
+
+  it('should right-align numeric values when column types are provided', () => {
+    const result = formatTable(
+      ['name', 'amount'],
+      [
+        ['A', 1],
+        ['Long', 200],
+      ],
+      { columnTypes: ['VARCHAR', 'INTEGER'] }
+    );
+    const dataLine = result.split('\n').find((line) => line.includes('A'))!;
+    const cells = dataLine.split('│');
+
+    expect(cells[1]).toMatch(/^ A +$/);
+    expect(cells[2]).toMatch(/^ +1 $/);
+  });
 });
 
 describe('formatCSV', () => {
@@ -65,6 +117,40 @@ describe('formatCSV', () => {
   it('should escape values with quotes', () => {
     const result = formatCSV(['value'], [['say "hello"']]);
     expect(result).toContain('"say ""hello"""');
+  });
+
+  it('should expose compatible header and row helpers', () => {
+    const columns = ['name', 'note'];
+    const rows = [['Alice', 'hello, "world"']];
+
+    expect([formatCSVHeader(columns), formatCSVRow(rows[0])].join('\n')).toBe(formatCSV(columns, rows));
+  });
+});
+
+describe('formatTSV', () => {
+  it('should format empty result', () => {
+    const result = formatTSV([], []);
+    expect(result).toBe('');
+  });
+
+  it('should format basic data', () => {
+    const columns = ['name', 'age'];
+    const rows = [['Alice', 30]];
+    const result = formatTSV(columns, rows);
+
+    expect(result).toBe('name\tage\nAlice\t30');
+  });
+
+  it('should escape tabs and newlines', () => {
+    const result = formatTSV(['value'], [['hello\tworld\nagain']]);
+    expect(result).toBe('value\nhello world again');
+  });
+
+  it('should expose compatible header and row helpers', () => {
+    const columns = ['name', 'note'];
+    const rows = [['Alice', 'hello\tworld']];
+
+    expect([formatTSVHeader(columns), formatTSVRow(rows[0])].join('\n')).toBe(formatTSV(columns, rows));
   });
 });
 

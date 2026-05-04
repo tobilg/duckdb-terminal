@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock @duckdb/duckdb-wasm
 const mockQuery = vi.fn();
+const mockSend = vi.fn();
 const mockClose = vi.fn();
 const mockTerminate = vi.fn();
 const mockConnect = vi.fn();
@@ -28,6 +29,7 @@ vi.mock('@duckdb/duckdb-wasm', () => ({
       open: mockOpen,
       connect: mockConnect.mockResolvedValue({
         query: mockQuery,
+        send: mockSend,
         close: mockClose,
       }),
       terminate: mockTerminate,
@@ -53,6 +55,26 @@ vi.stubGlobal('URL', {
 });
 
 import { Database } from './database';
+
+function createMockBatch(rows: unknown[][]) {
+  return {
+    numRows: rows.length,
+    getChildAt: vi.fn().mockImplementation((columnIndex: number) => ({
+      get: vi.fn().mockImplementation((rowIndex: number) => rows[rowIndex][columnIndex]),
+    })),
+  };
+}
+
+function createMockReader(fields: Array<{ name: string; type?: unknown }>, batches: unknown[][][]) {
+  return {
+    schema: { fields },
+    async *[Symbol.asyncIterator]() {
+      for (const batchRows of batches) {
+        yield createMockBatch(batchRows);
+      }
+    },
+  };
+}
 
 describe('Database', () => {
   let db: Database;
@@ -112,6 +134,37 @@ describe('Database', () => {
       expect(result.columns).toEqual(['result']);
       expect(result.rowCount).toBe(1);
       expect(result.duration).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('streamQuery', () => {
+    it('should throw if not initialized', async () => {
+      await expect(db.streamQuery('SELECT 1')).rejects.toThrow('Database not initialized');
+    });
+
+    it('should send query with streaming enabled and return row batches', async () => {
+      mockSend.mockResolvedValueOnce(createMockReader(
+        [{ name: 'name', type: 'VARCHAR' }, { name: 'age', type: 'INTEGER' }],
+        [
+          [['Alice', 30]],
+          [['Bob', 25]],
+        ]
+      ));
+
+      await db.init();
+      const result = await db.streamQuery('SELECT name, age FROM users');
+      const batches: unknown[][][] = [];
+      for await (const rows of result.rowBatches) {
+        batches.push(rows);
+      }
+
+      expect(mockSend).toHaveBeenCalledWith('SELECT name, age FROM users', true);
+      expect(result.columns).toEqual(['name', 'age']);
+      expect(result.columnTypes).toEqual(['VARCHAR', 'INTEGER']);
+      expect(batches).toEqual([
+        [['Alice', 30]],
+        [['Bob', 25]],
+      ]);
     });
   });
 

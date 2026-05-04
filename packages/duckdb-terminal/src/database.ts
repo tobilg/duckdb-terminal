@@ -1,4 +1,5 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
+import type * as arrow from 'apache-arrow';
 import type { QueryResult, CompletionSuggestion } from './types';
 
 /**
@@ -84,6 +85,12 @@ export interface SQLError {
   position: string;
   /** Additional error subtype information */
   errorSubtype: string;
+}
+
+export interface StreamQueryResult {
+  columns: string[];
+  columnTypes: string[];
+  rowBatches: AsyncIterable<unknown[][]>;
 }
 
 export class Database {
@@ -229,6 +236,53 @@ export class Database {
       rowCount: numRows,
       duration,
     };
+  }
+
+  /**
+   * Sends a SQL query and returns Arrow record batches as row arrays.
+   *
+   * This is intended for output modes that can display rows incrementally.
+   * Callers that need a fully materialized result should keep using
+   * {@link executeQuery}.
+   *
+   * @param sql - The SQL statement to execute
+   * @returns A stream result containing column metadata and async row batches
+   *
+   * @throws Error if the database is not initialized
+   * @throws Error if the SQL query is invalid or fails
+   */
+  async streamQuery(sql: string): Promise<StreamQueryResult> {
+    if (!this.conn) {
+      throw new Error('Database not initialized');
+    }
+
+    const reader = await this.conn.send(sql, true);
+    const columns = reader.schema.fields.map((field) => field.name);
+    const columnTypes = reader.schema.fields.map((field) => String(field.type));
+
+    return {
+      columns,
+      columnTypes,
+      rowBatches: this.readRowBatches(reader, columns.length),
+    };
+  }
+
+  private async *readRowBatches(
+    reader: arrow.AsyncRecordBatchStreamReader,
+    columnCount: number
+  ): AsyncIterable<unknown[][]> {
+    for await (const batch of reader) {
+      const rows: unknown[][] = [];
+      for (let i = 0; i < batch.numRows; i++) {
+        const row: unknown[] = [];
+        for (let j = 0; j < columnCount; j++) {
+          const column = batch.getChildAt(j);
+          row.push(column?.get(i));
+        }
+        rows.push(row);
+      }
+      yield rows;
+    }
   }
 
   /**

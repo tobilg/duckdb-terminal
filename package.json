@@ -11,6 +11,7 @@
     "build:lib": "npm run build -w duckdb-terminal",
     "build:website": "npm run build:lib && npm run build -w @duckdb-terminal/website",
     "test": "npm run test -w duckdb-terminal",
+    "test:watch": "npm run test:watch -w duckdb-terminal",
     "test:ui": "npm run test:ui -w duckdb-terminal",
     "test:coverage": "npm run test:coverage -w duckdb-terminal",
     "typecheck": "npm run typecheck --workspaces --if-present",

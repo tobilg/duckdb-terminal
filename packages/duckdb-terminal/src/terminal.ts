@@ -2,7 +2,16 @@ import { TerminalAdapter } from './terminal-adapter';
 import { Database } from './database';
 import { InputBuffer } from './utils/input-buffer';
 import { HistoryStore } from './utils/history';
-import { formatTable, formatCSV, formatTSV, formatJSON } from './utils/table-formatter';
+import {
+  formatTable,
+  formatCSV,
+  formatCSVHeader,
+  formatCSVRow,
+  formatTSV,
+  formatTSVHeader,
+  formatTSVRow,
+  formatJSON,
+} from './utils/table-formatter';
 import {
   pickFiles,
   readFileAsBuffer,
@@ -49,6 +58,8 @@ import {
 const DEFAULT_PROMPT = '🦆 ';
 /** Default continuation prompt displayed for multi-line SQL statements */
 const DEFAULT_CONTINUATION_PROMPT = '  > ';
+const STREAM_FLUSH_INTERVAL_MS = 16;
+const STREAM_MAX_CHUNK_CHARS = 32 * 1024;
 
 /**
  * A browser-based SQL terminal for DuckDB, powered by Ghostty terminal emulator.
@@ -1590,7 +1601,9 @@ export class DuckDBTerminal implements TerminalInterface {
       // Skip pagination if query already has LIMIT or OFFSET (user is controlling result size)
       const hasLimitOffset = /\b(LIMIT|OFFSET)\b/i.test(trimmedSQL);
 
-      if (this.pageSize > 0 && isSelectQuery && !hasLimitOffset) {
+      const shouldUsePagination = this.pageSize > 0 && isSelectQuery && !hasLimitOffset;
+
+      if (shouldUsePagination) {
         // Get total row count first
         const countSQL = `SELECT COUNT(*) as cnt FROM (${trimmedSQL}) AS _count_subquery`;
         const countResult = await this.database.executeQuery(countSQL);
@@ -1605,6 +1618,23 @@ export class DuckDBTerminal implements TerminalInterface {
           this.currentPage = 0;
           return await this.executePaginatedQuery();
         }
+      }
+
+      if (this.shouldStreamDelimitedOutput(shouldUsePagination)) {
+        const result = await this.executeDelimitedStream(sql, startTime);
+        const duration = performance.now() - startTime;
+
+        this.lastQueryResult = result;
+
+        if (this.showTimer) {
+          this.writeln(
+            vt100.dim(`Time: ${result.duration.toFixed(2)}ms`)
+          );
+        }
+
+        this.emit('queryEnd', { sql, result, duration });
+
+        return result;
       }
 
       // Execute without pagination
@@ -1707,6 +1737,91 @@ export class DuckDBTerminal implements TerminalInterface {
     this.setState('idle');
   }
 
+  private shouldStreamDelimitedOutput(paginationWasConsidered: boolean): boolean {
+    return !paginationWasConsidered && (this.outputMode === 'csv' || this.outputMode === 'tsv');
+  }
+
+  private async executeDelimitedStream(sql: string, startTime: number): Promise<QueryResult> {
+    const stream = await this.database.streamQuery(sql);
+    const rows: unknown[][] = [];
+
+    if (stream.columns.length > 0) {
+      this.writeStreamText(this.formatDelimitedHeader(stream.columns) + '\n');
+      await this.yieldAfterStreamFlush();
+    }
+
+    let buffer = '';
+    let lastFlush = performance.now();
+    const flush = async (force = false): Promise<void> => {
+      if (!buffer) {
+        return;
+      }
+      if (!force) {
+        const elapsed = performance.now() - lastFlush;
+        if (elapsed < STREAM_FLUSH_INTERVAL_MS && buffer.length < STREAM_MAX_CHUNK_CHARS) {
+          return;
+        }
+      }
+
+      this.writeStreamText(buffer);
+      buffer = '';
+      lastFlush = performance.now();
+      await this.yieldAfterStreamFlush();
+    };
+
+    for await (const rowBatch of stream.rowBatches) {
+      rows.push(...rowBatch);
+      for (const row of rowBatch) {
+        buffer += this.formatDelimitedRow(row) + '\n';
+        await flush();
+      }
+      await flush(true);
+    }
+
+    await flush(true);
+
+    const duration = performance.now() - startTime;
+    const result: QueryResult = {
+      columns: stream.columns,
+      columnTypes: stream.columnTypes,
+      rows,
+      rowCount: rows.length,
+      duration,
+    };
+
+    if (result.columns.length > 0) {
+      this.writeln(
+        vt100.dim(
+          `${result.rowCount} row${result.rowCount !== 1 ? 's' : ''}`
+        )
+      );
+    }
+
+    return result;
+  }
+
+  private formatDelimitedHeader(columns: string[]): string {
+    return this.outputMode === 'tsv' ? formatTSVHeader(columns) : formatCSVHeader(columns);
+  }
+
+  private formatDelimitedRow(row: unknown[]): string {
+    return this.outputMode === 'tsv' ? formatTSVRow(row) : formatCSVRow(row);
+  }
+
+  private writeStreamText(text: string): void {
+    const processed = this.linkProvider.process(text);
+    this.write(processed.replace(/\r?\n/g, '\r\n'));
+  }
+
+  private async yieldAfterStreamFlush(): Promise<void> {
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+      await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
+      return;
+    }
+
+    await Promise.resolve();
+  }
+
   /**
    * Displays a query result in the current output mode.
    *
@@ -1728,7 +1843,14 @@ export class DuckDBTerminal implements TerminalInterface {
         break;
       case 'table':
       default:
-        this.writeln(formatTable(result.columns, result.rows));
+        this.terminalAdapter.fit();
+        this.writeln(formatTable(result.columns, result.rows, {
+          columnTypes: result.columnTypes,
+          maxWidth: this.terminalAdapter.cols,
+          maxColumnWidth: 80,
+          showTypes: Boolean(result.columnTypes?.length),
+          alignByType: true,
+        }));
         break;
     }
 

@@ -25,6 +25,7 @@ vi.mock('ghostty-web', () => ({
   FitAddon: vi.fn().mockImplementation(function() {
     return {
       fit: vi.fn(),
+      proposeDimensions: vi.fn(),
     };
   }),
 }));
@@ -70,6 +71,18 @@ describe('TerminalAdapter', () => {
         theme: lightTheme,
       });
       expect(adapter.getTheme()?.name).toBe('light');
+    });
+
+    it('should prefer proposed fit dimensions for column count', async () => {
+      await adapter.init(container);
+      const internals = adapter as unknown as {
+        fitAddon: {
+          proposeDimensions: ReturnType<typeof vi.fn>;
+        };
+      };
+      internals.fitAddon.proposeDimensions.mockReturnValue({ cols: 48, rows: 20 });
+
+      expect(adapter.cols).toBe(48);
     });
 
     it('should default to null theme if not provided', async () => {

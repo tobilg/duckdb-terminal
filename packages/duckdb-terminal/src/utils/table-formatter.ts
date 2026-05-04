@@ -4,12 +4,18 @@
 
 /** Default maximum width for a single column in characters */
 export const DEFAULT_MAX_COLUMN_WIDTH = 50;
+const DEFAULT_MIN_COLUMN_WIDTH = 3;
 
 export interface TableOptions {
   maxWidth?: number;
   maxColumnWidth?: number;
   nullValue?: string;
+  columnTypes?: string[];
+  showTypes?: boolean;
+  alignByType?: boolean;
 }
+
+type CellAlignment = 'left' | 'right' | 'center';
 
 /**
  * Get display width of a string (handles unicode)
@@ -50,9 +56,32 @@ function padEnd(str: string, width: number): string {
 }
 
 /**
+ * Pad string at the start to specified width
+ */
+function padStart(str: string, width: number): string {
+  const displayWidth = getDisplayWidth(str);
+  const padding = width - displayWidth;
+  if (padding <= 0) return str;
+  return ' '.repeat(padding) + str;
+}
+
+/**
+ * Pad string on both sides to specified width
+ */
+function padCenter(str: string, width: number): string {
+  const displayWidth = getDisplayWidth(str);
+  const padding = width - displayWidth;
+  if (padding <= 0) return str;
+  const left = Math.ceil(padding / 2);
+  const right = Math.floor(padding / 2);
+  return ' '.repeat(left) + str + ' '.repeat(right);
+}
+
+/**
  * Truncate string to max width
  */
 function truncate(str: string, maxWidth: number): string {
+  if (maxWidth <= 0) return '';
   if (getDisplayWidth(str) <= maxWidth) return str;
   let result = '';
   let width = 0;
@@ -64,6 +93,19 @@ function truncate(str: string, maxWidth: number): string {
     width += charWidth;
   }
   return result + '\u2026'; // ellipsis
+}
+
+function alignCell(str: string, width: number, alignment: CellAlignment): string {
+  const truncated = truncate(str, width);
+  switch (alignment) {
+    case 'right':
+      return padStart(truncated, width);
+    case 'center':
+      return padCenter(truncated, width);
+    case 'left':
+    default:
+      return padEnd(truncated, width);
+  }
 }
 
 /**
@@ -181,6 +223,143 @@ function formatValue(value: unknown, nullValue: string): string {
   return String(value);
 }
 
+function normalizeColumnType(type: string | undefined): string {
+  const normalized = (type ?? '').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  const lower = normalized.toLowerCase();
+  switch (lower) {
+    case 'utf8':
+    case 'largeutf8':
+      return 'varchar';
+    case 'float64':
+      return 'double';
+    case 'float32':
+      return 'float';
+    case 'int8':
+      return 'tinyint';
+    case 'int16':
+      return 'smallint';
+    case 'int32':
+      return 'integer';
+    case 'int64':
+      return 'bigint';
+    case 'uint8':
+    case 'uint16':
+    case 'uint32':
+    case 'uint64':
+      return lower;
+    case 'bool':
+      return 'boolean';
+    default:
+      return lower;
+  }
+}
+
+function isRightAlignedType(type: string | undefined): boolean {
+  const normalized = normalizeColumnType(type);
+  return /^(bool|boolean|tinyint|smallint|integer|int|bigint|hugeint|u?int\d*|float|double|real|decimal|numeric)/.test(normalized);
+}
+
+function getTableOverhead(columnCount: number): number {
+  return columnCount * 3 + 1;
+}
+
+function allocateWidths(
+  naturalWidths: number[],
+  maxWidth: number | undefined,
+  maxColumnWidth: number
+): number[] {
+  const cappedNaturalWidths = naturalWidths.map((width) =>
+    Math.max(1, Math.min(width, maxColumnWidth))
+  );
+
+  if (!maxWidth || maxWidth <= 0 || !Number.isFinite(maxWidth)) {
+    return cappedNaturalWidths;
+  }
+
+  const columnCount = cappedNaturalWidths.length;
+  const contentBudget = Math.floor(maxWidth) - getTableOverhead(columnCount);
+  if (contentBudget <= 0) {
+    return cappedNaturalWidths.map(() => 1);
+  }
+
+  const naturalTotal = cappedNaturalWidths.reduce((sum, width) => sum + width, 0);
+  if (naturalTotal <= contentBudget) {
+    return cappedNaturalWidths;
+  }
+
+  const minColumnWidth = Math.min(DEFAULT_MIN_COLUMN_WIDTH, maxColumnWidth);
+  const minimumWidths = cappedNaturalWidths.map((width) => Math.min(width, minColumnWidth));
+  const minimumTotal = minimumWidths.reduce((sum, width) => sum + width, 0);
+
+  if (minimumTotal > contentBudget) {
+    return distributeContentBudget(cappedNaturalWidths, contentBudget);
+  }
+
+  const widths = [...minimumWidths];
+  let remaining = contentBudget - minimumTotal;
+
+  while (remaining > 0) {
+    const candidates = widths
+      .map((width, index) => ({ width, index, needed: cappedNaturalWidths[index] - width }))
+      .filter((candidate) => candidate.needed > 0);
+
+    if (candidates.length === 0) {
+      break;
+    }
+
+    const share = Math.max(1, Math.floor(remaining / candidates.length));
+    let distributed = 0;
+    for (const candidate of candidates) {
+      if (remaining <= 0) {
+        break;
+      }
+      const add = Math.min(candidate.needed, share, remaining);
+      widths[candidate.index] += add;
+      remaining -= add;
+      distributed += add;
+    }
+
+    if (distributed === 0) {
+      break;
+    }
+  }
+
+  return widths;
+}
+
+function distributeContentBudget(naturalWidths: number[], contentBudget: number): number[] {
+  if (contentBudget < naturalWidths.length) {
+    return naturalWidths.map(() => 1);
+  }
+
+  const widths = naturalWidths.map(() => 1);
+  let remaining = contentBudget - naturalWidths.length;
+
+  while (remaining > 0) {
+    const candidates = widths
+      .map((width, index) => ({ width, index, needed: naturalWidths[index] - width }))
+      .filter((candidate) => candidate.needed > 0);
+
+    if (candidates.length === 0) {
+      break;
+    }
+
+    for (const candidate of candidates) {
+      if (remaining <= 0) {
+        break;
+      }
+      widths[candidate.index] += 1;
+      remaining -= 1;
+    }
+  }
+
+  return widths;
+}
+
 /**
  * Format query results as ASCII table
  */
@@ -189,29 +368,41 @@ export function formatTable(
   rows: unknown[][],
   options: TableOptions = {}
 ): string {
-  const { maxColumnWidth = DEFAULT_MAX_COLUMN_WIDTH, nullValue = 'NULL' } = options;
+  const {
+    maxColumnWidth = DEFAULT_MAX_COLUMN_WIDTH,
+    maxWidth,
+    nullValue = 'NULL',
+    columnTypes,
+    showTypes = false,
+    alignByType = Boolean(columnTypes),
+  } = options;
 
   if (columns.length === 0) {
     return '';
   }
 
+  const columnWidthCap = maxColumnWidth > 0 ? maxColumnWidth : Number.MAX_SAFE_INTEGER;
+  const typeLabels = showTypes ? columns.map((_, index) => normalizeColumnType(columnTypes?.[index])) : [];
+
   // Format all values
   const formattedRows = rows.map((row) =>
-    row.map((value) => {
-      const formatted = formatValue(value, nullValue);
-      return maxColumnWidth ? truncate(formatted, maxColumnWidth) : formatted;
-    })
+    columns.map((_, index) => formatValue(row[index], nullValue))
   );
 
   // Calculate column widths
-  const widths = columns.map((col, i) => {
+  const naturalWidths = columns.map((col, i) => {
     const headerWidth = getDisplayWidth(col);
+    const typeWidth = getDisplayWidth(typeLabels[i] ?? '');
     const maxDataWidth = formattedRows.reduce((max, row) => {
       const cellWidth = getDisplayWidth(row[i] ?? '');
       return Math.max(max, cellWidth);
     }, 0);
-    return Math.min(Math.max(headerWidth, maxDataWidth), maxColumnWidth);
+    return Math.max(headerWidth, typeWidth, maxDataWidth);
   });
+  const widths = allocateWidths(naturalWidths, maxWidth, columnWidthCap);
+  const dataAlignments: CellAlignment[] = columns.map((_, index) =>
+    alignByType && isRightAlignedType(columnTypes?.[index]) ? 'right' : 'left'
+  );
 
   // Build table
   const lines: string[] = [];
@@ -222,9 +413,17 @@ export function formatTable(
   // Header row
   lines.push(
     '\u2502' +
-      columns.map((col, i) => ' ' + padEnd(truncate(col, widths[i]), widths[i]) + ' ').join('\u2502') +
+      columns.map((col, i) => ' ' + alignCell(col, widths[i], 'center') + ' ').join('\u2502') +
       '\u2502'
   );
+
+  if (showTypes) {
+    lines.push(
+      '\u2502' +
+        typeLabels.map((type, i) => ' ' + alignCell(type, widths[i], 'center') + ' ').join('\u2502') +
+        '\u2502'
+    );
+  }
 
   // Header separator
   lines.push('\u251c' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u253c') + '\u2524');
@@ -233,7 +432,7 @@ export function formatTable(
   for (const row of formattedRows) {
     lines.push(
       '\u2502' +
-        row.map((cell, i) => ' ' + padEnd(cell, widths[i]) + ' ').join('\u2502') +
+        columns.map((_, i) => ' ' + alignCell(row[i] ?? '', widths[i], dataAlignments[i]) + ' ').join('\u2502') +
         '\u2502'
     );
   }
@@ -248,38 +447,63 @@ export function formatTable(
  * Format query results as CSV
  */
 export function formatCSV(columns: string[], rows: unknown[][]): string {
-  const escapeCSV = (value: unknown): string => {
-    const str = formatValue(value, '');
-    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-      return '"' + str.replace(/"/g, '""') + '"';
-    }
-    return str;
-  };
-
-  const lines: string[] = [];
-  lines.push(columns.map(escapeCSV).join(','));
-  for (const row of rows) {
-    lines.push(row.map(escapeCSV).join(','));
+  if (columns.length === 0) {
+    return '';
   }
+
+  const lines = [formatCSVHeader(columns)];
+  lines.push(...formatCSVRows(rows));
   return lines.join('\n');
+}
+
+export function formatCSVHeader(columns: string[]): string {
+  return columns.map(escapeCSVValue).join(',');
+}
+
+export function formatCSVRow(row: unknown[]): string {
+  return row.map(escapeCSVValue).join(',');
+}
+
+export function formatCSVRows(rows: unknown[][]): string[] {
+  return rows.map(formatCSVRow);
 }
 
 /**
  * Format query results as TSV (Tab-Separated Values)
  */
 export function formatTSV(columns: string[], rows: unknown[][]): string {
-  const escapeTSV = (value: unknown): string => {
-    const str = formatValue(value, '');
-    // Replace tabs and newlines with spaces to avoid breaking TSV format
-    return str.replace(/\t/g, ' ').replace(/\n/g, ' ');
-  };
-
-  const lines: string[] = [];
-  lines.push(columns.map(escapeTSV).join('\t'));
-  for (const row of rows) {
-    lines.push(row.map(escapeTSV).join('\t'));
+  if (columns.length === 0) {
+    return '';
   }
+
+  const lines = [formatTSVHeader(columns)];
+  lines.push(...formatTSVRows(rows));
   return lines.join('\n');
+}
+
+export function formatTSVHeader(columns: string[]): string {
+  return columns.map(escapeTSVValue).join('\t');
+}
+
+export function formatTSVRow(row: unknown[]): string {
+  return row.map(escapeTSVValue).join('\t');
+}
+
+export function formatTSVRows(rows: unknown[][]): string[] {
+  return rows.map(formatTSVRow);
+}
+
+function escapeCSVValue(value: unknown): string {
+  const str = formatValue(value, '');
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+function escapeTSVValue(value: unknown): string {
+  const str = formatValue(value, '');
+  return str.replace(/\t/g, ' ').replace(/\n/g, ' ');
 }
 
 /**

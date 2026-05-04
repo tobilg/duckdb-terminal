@@ -1,6 +1,6 @@
 {
   "name": "duckdb-terminal",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "DuckDB SQL Terminal powered by Ghostty terminal emulator",
   "type": "module",
   "main": "./dist/duckdb-terminal.umd.cjs",
@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest",
+    "test": "vitest --run",
+    "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "generate-docs": "typedoc"

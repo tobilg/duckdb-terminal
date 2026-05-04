@@ -24,6 +24,7 @@ vi.mock('ghostty-web', () => ({
   FitAddon: vi.fn().mockImplementation(function() {
     return {
       fit: vi.fn(),
+      proposeDimensions: vi.fn(),
     };
   }),
 }));
@@ -38,6 +39,11 @@ vi.mock('./database', () => ({
         rows: [],
         rowCount: 0,
         duration: 0,
+      }),
+      streamQuery: vi.fn().mockResolvedValue({
+        columns: [],
+        columnTypes: [],
+        rowBatches: (async function*() {})(),
       }),
       getTables: vi.fn().mockResolvedValue([]),
       getTableSchema: vi.fn().mockResolvedValue([]),
@@ -68,9 +74,32 @@ vi.mock('./utils/history', () => ({
 // Import after mocking
 import { DuckDBTerminal } from './terminal';
 import { darkTheme } from './themes';
+import type { QueryResult } from './types';
 
 function stripAnsi(text: string): string {
   return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+async function* rowBatches(batches: unknown[][][]): AsyncIterable<unknown[][]> {
+  for (const batch of batches) {
+    yield batch;
+  }
+}
+
+function getTerminalInternals(terminal: DuckDBTerminal) {
+  return terminal as unknown as {
+    outputMode: 'table' | 'csv' | 'tsv' | 'json';
+    lastQueryResult: QueryResult | null;
+    database: {
+      executeQuery: ReturnType<typeof vi.fn>;
+      streamQuery: ReturnType<typeof vi.fn>;
+    };
+    terminalAdapter: {
+      terminal: {
+        cols: number;
+      };
+    };
+  };
 }
 
 describe('DuckDBTerminal Events', () => {
@@ -219,6 +248,7 @@ describe('DuckDBTerminal Events', () => {
 
   describe('error handling in listeners', () => {
     it('should not throw when listener throws', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const errorListener = vi.fn().mockImplementation(() => {
         throw new Error('Listener error');
       });
@@ -232,6 +262,11 @@ describe('DuckDBTerminal Events', () => {
 
       // Normal listener should still be called
       expect(normalListener).toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Error in ready event listener:',
+        expect.any(Error)
+      );
+      consoleErrorSpy.mockRestore();
     });
   });
 });
@@ -360,6 +395,115 @@ describe('DuckDBTerminal Commands', () => {
 
       const output = mockWriteln.mock.calls.map(c => c[0]).join('\n');
       expect(output).toContain('Output mode:');
+    });
+  });
+
+  describe('CSV/TSV streaming output', () => {
+    it('should stream CSV output incrementally and preserve the final result', async () => {
+      const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(terminal, 'write');
+      let headerWasWrittenBeforeRows = false;
+
+      internals.outputMode = 'csv';
+      internals.database.streamQuery.mockResolvedValueOnce({
+        columns: ['name', 'age'],
+        columnTypes: ['VARCHAR', 'INTEGER'],
+        rowBatches: (async function*() {
+          headerWasWrittenBeforeRows = writeSpy.mock.calls
+            .map((call) => call[0])
+            .join('')
+            .includes('name,age');
+          yield [['Alice', 30]];
+          yield [['Bob, Jr.', 25]];
+        })(),
+      });
+
+      const result = await terminal.executeSQL('SELECT name, age FROM users;');
+      const output = writeSpy.mock.calls.map((call) => call[0]).join('');
+
+      expect(internals.database.streamQuery).toHaveBeenCalledWith('SELECT name, age FROM users;');
+      expect(internals.database.executeQuery).not.toHaveBeenCalled();
+      expect(headerWasWrittenBeforeRows).toBe(true);
+      expect(output).toContain('name,age\r\n');
+      expect(output).toContain('Alice,30\r\n');
+      expect(output).toContain('"Bob, Jr.",25\r\n');
+      expect(result?.rows).toEqual([
+        ['Alice', 30],
+        ['Bob, Jr.', 25],
+      ]);
+      expect(internals.lastQueryResult?.rows).toEqual(result?.rows);
+    });
+
+    it('should stream TSV output and preserve escaped rows', async () => {
+      const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(terminal, 'write');
+
+      internals.outputMode = 'tsv';
+      internals.database.streamQuery.mockResolvedValueOnce({
+        columns: ['name', 'note'],
+        columnTypes: ['VARCHAR', 'VARCHAR'],
+        rowBatches: rowBatches([[['Alice', 'hello\tworld']]]),
+      });
+
+      const result = await terminal.executeSQL('SELECT name, note FROM users;');
+      const output = writeSpy.mock.calls.map((call) => call[0]).join('');
+
+      expect(internals.database.streamQuery).toHaveBeenCalled();
+      expect(output).toContain('name\tnote\r\n');
+      expect(output).toContain('Alice\thello world\r\n');
+      expect(internals.lastQueryResult?.rows).toEqual(result?.rows);
+    });
+
+    it('should keep table and JSON modes on the materialized query path', async () => {
+      const internals = getTerminalInternals(terminal);
+
+      internals.outputMode = 'table';
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['value'],
+        rows: [[1]],
+        rowCount: 1,
+        duration: 1,
+      });
+
+      await terminal.executeSQL('SELECT 1 AS value;');
+
+      internals.outputMode = 'json';
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['value'],
+        rows: [[2]],
+        rowCount: 1,
+        duration: 1,
+      });
+
+      await terminal.executeSQL('SELECT 2 AS value;');
+
+      expect(internals.database.streamQuery).not.toHaveBeenCalled();
+      expect(internals.database.executeQuery).toHaveBeenCalledTimes(2);
+    });
+
+    it('should render table output with terminal width and column types', async () => {
+      const internals = getTerminalInternals(terminal);
+      internals.outputMode = 'table';
+      internals.terminalAdapter.terminal.cols = 42;
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['id', 'description'],
+        columnTypes: ['INTEGER', 'VARCHAR'],
+        rows: [[1, 'United States, Mexico, and Canada pricing region']],
+        rowCount: 1,
+        duration: 1,
+      });
+
+      await terminal.executeSQL('SELECT id, description FROM regions;');
+
+      const output = stripAnsi(mockWriteln.mock.calls.map((call) => call[0]).join('\n'));
+      const tableLines = output.split(/\r?\n/).filter((line) => /^[┌│├└]/.test(line));
+
+      expect(output).toContain('integer');
+      expect(output).toContain('varchar');
+      expect(tableLines.length).toBeGreaterThan(0);
+      for (const line of tableLines) {
+        expect(line.length).toBeLessThanOrEqual(42);
+      }
     });
   });
 
