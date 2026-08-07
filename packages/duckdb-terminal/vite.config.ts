@@ -2,7 +2,6 @@ import { defineConfig } from 'vitest/config';
 import { resolve, dirname, join } from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import dts from 'vite-plugin-dts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -34,14 +33,6 @@ export default defineConfig({
     __GHOSTTY_VERSION__: JSON.stringify(ghosttyPkg.version),
     __UPLOT_VERSION__: JSON.stringify(uplotPkg.version),
   },
-  plugins: [
-    dts({
-      include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts'],
-      // Bundle all type declarations into a single index.d.ts file
-      rollupTypes: true,
-    }),
-  ],
   build: {
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),

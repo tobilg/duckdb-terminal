@@ -1,6 +1,6 @@
 {
   "name": "@duckdb-terminal/website",
-  "version": "0.0.0",
+  "version": "0.5.5",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,6 @@
     "duckdb-terminal": "*"
   },
   "devDependencies": {
-    "vite": "^8.0.10"
+    "vite": "^8.2.1"
   }
 }

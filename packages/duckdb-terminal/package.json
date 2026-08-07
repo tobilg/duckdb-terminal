@@ -1,6 +1,6 @@
 {
   "name": "duckdb-terminal",
-  "version": "0.5.3",
+  "version": "0.5.5",
   "description": "DuckDB SQL Terminal powered by Ghostty terminal emulator",
   "type": "module",
   "main": "./dist/duckdb-terminal.umd.cjs",
@@ -17,7 +17,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc && vite build",
+    "build": "vite build && tsc --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
     "test": "vitest --run",
     "test:watch": "vitest",
@@ -41,18 +41,17 @@
     "url": "https://github.com/tobilg/duckdb-terminal"
   },
   "peerDependencies": {
-    "@duckdb/duckdb-wasm": "1.33.1-dev45.0",
+    "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
     "ghostty-web": "^0.4.0"
   },
   "devDependencies": {
-    "@duckdb/duckdb-wasm": "1.33.1-dev45.0",
+    "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
     "@types/node": "^22",
     "ghostty-web": "^0.4.0",
-    "jsdom": "^29.1.0",
-    "typedoc": "^0.28.19",
+    "jsdom": "^30.0.1",
+    "typedoc": "^0.28.20",
     "uplot": "^1.6.32",
-    "vite": "^8.0.10",
-    "vite-plugin-dts": "^4.5.4",
-    "vitest": "^4.1.5"
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
   }
 }
