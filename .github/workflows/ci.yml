@@ -17,23 +17,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: 'pnpm'
+          cache-dependency-path: 'pnpm-lock.yaml'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Run tests
-        run: npm test
+        run: pnpm test
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
   deploy-docs:
     name: Deploy API docs to GitHub Pages
@@ -58,20 +62,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: 'pnpm'
+          cache-dependency-path: 'pnpm-lock.yaml'
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Generate API docs
-        run: npm run generate-docs
+        run: pnpm run generate-docs
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
@@ -97,6 +105,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Verify tag is on main branch
         run: |
           git fetch origin main
@@ -110,13 +121,14 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
+          cache: 'pnpm'
+          cache-dependency-path: 'pnpm-lock.yaml'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build library
-        run: npm run build:lib
+        run: pnpm run build:lib
 
       - name: Publish to npm
         run: npm publish -w duckdb-terminal --provenance --access public

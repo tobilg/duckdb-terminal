@@ -1,25 +1,26 @@
 {
   "name": "duckdb-terminal-monorepo",
   "private": true,
+  "packageManager": "pnpm@10.33.3",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/website/.vite",
-    "dev": "npm run dev -w @duckdb-terminal/website",
-    "build": "npm run build -w duckdb-terminal && npm run build -w @duckdb-terminal/website",
-    "build:lib": "npm run build -w duckdb-terminal",
-    "build:website": "npm run build:lib && npm run build -w @duckdb-terminal/website",
-    "test": "npm run test -w duckdb-terminal",
-    "test:watch": "npm run test:watch -w duckdb-terminal",
-    "test:ui": "npm run test:ui -w duckdb-terminal",
-    "test:coverage": "npm run test:coverage -w duckdb-terminal",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "generate-docs": "npm run generate-docs -w duckdb-terminal",
+    "dev": "pnpm --filter @duckdb-terminal/website run dev",
+    "build": "pnpm --filter duckdb-terminal run build && pnpm --filter @duckdb-terminal/website run build",
+    "build:lib": "pnpm --filter duckdb-terminal run build",
+    "build:website": "pnpm run build:lib && pnpm --filter @duckdb-terminal/website run build",
+    "test": "pnpm --filter duckdb-terminal run test",
+    "test:watch": "pnpm --filter duckdb-terminal run test:watch",
+    "test:ui": "pnpm --filter duckdb-terminal run test:ui",
+    "test:coverage": "pnpm --filter duckdb-terminal run test:coverage",
+    "typecheck": "pnpm --recursive --if-present run typecheck",
+    "generate-docs": "pnpm --filter duckdb-terminal run generate-docs",
     "deploy": "pnpm run build && wrangler pages deploy packages/website/dist --project-name=terminal-sql-workbench-com"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
+    "typescript": "^6.0.3",
     "wrangler": "^4.120.0"
   }
 }
