@@ -1,28 +1,8 @@
 import { defineConfig } from 'vite';
-import { resolve, dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Helper to find package.json in node_modules (handles hoisting)
-function findPackageJson(packageName: string): Record<string, unknown> {
-  const paths = [
-    join(__dirname, 'node_modules', packageName, 'package.json'),
-    join(__dirname, '..', '..', 'node_modules', packageName, 'package.json'),
-  ];
-  for (const p of paths) {
-    try {
-      return JSON.parse(readFileSync(p, 'utf-8'));
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`Could not find package.json for ${packageName}`);
-}
-
-// Read version from ghostty-web for CDN path
-const ghosttyPkg = findPackageJson('ghostty-web');
 
 export default defineConfig({
   root: __dirname,
@@ -35,14 +15,13 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         guide: resolve(__dirname, 'guide/index.html'),
       },
-      // Externalize ghostty-web - load from CDN at runtime
-      external: ['ghostty-web'],
       output: {
-        // Use CDN path for ghostty-web
-        paths: {
-          'ghostty-web': `https://cdn.jsdelivr.net/npm/ghostty-web@${ghosttyPkg.version}/dist/ghostty-web.js`,
-        },
         manualChunks(id) {
+          // Keep the terminal emulator separate from the application bundle.
+          if (id.includes('ghostty-web')) {
+            return 'ghostty';
+          }
+
           // Separate DuckDB WASM into its own chunk.
           if (id.includes('@duckdb/duckdb-wasm')) {
             return 'duckdb';
