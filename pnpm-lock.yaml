@@ -23,6 +23,9 @@ importers:
       '@types/node':
         specifier: ^22
         version: 22.20.1
+      apache-arrow:
+        specifier: ^17.0.0
+        version: 17.0.0
       ghostty-web:
         specifier: ^0.4.0
         version: 0.4.0
