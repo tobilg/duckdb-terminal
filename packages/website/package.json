@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "duckdb-terminal": "*"
+    "duckdb-terminal": "workspace:*"
   },
   "devDependencies": {
     "vite": "^8.2.1"

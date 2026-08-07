@@ -45,8 +45,8 @@ importers:
   packages/website:
     dependencies:
       duckdb-terminal:
-        specifier: '*'
-        version: 0.5.3(@duckdb/duckdb-wasm@1.33.1-dev45.0)(ghostty-web@0.4.0)
+        specifier: workspace:*
+        version: link:../duckdb-terminal
     devDependencies:
       vite:
         specifier: ^8.2.1
@@ -148,9 +148,6 @@ packages:
   '@csstools/css-tokenizer@4.0.0':
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
-
-  '@duckdb/duckdb-wasm@1.33.1-dev45.0':
-    resolution: {integrity: sha512-ETlrjhiGQzNdaOhpro/Y9u/RCcK+iyuczLy7uOn0kG5Mqlj8C+gTuhBXjs4JpK9ocdUgr3oT8zYYIbUnFD9AYA==}
 
   '@duckdb/duckdb-wasm@1.33.1-dev64.0':
     resolution: {integrity: sha512-NwJipYVG5B1lyPzvxfy7y1UldrezQDRyblKxu/DQqIVttuCU2yIsbNEJ0tvhMXyS1/7+m1vXildzhO+q2vqitg==}
@@ -901,12 +898,6 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  duckdb-terminal@0.5.3:
-    resolution: {integrity: sha512-HPRCDLQY+oS2X44iUq4PcWwy/Nor64fK0Xh90aRMTOWBmlTY+wa3arOTMtWPjoW6OYvauVPU7XfFsLfy+yXYGA==}
-    peerDependencies:
-      '@duckdb/duckdb-wasm': 1.33.1-dev45.0
-      ghostty-web: ^0.4.0
-
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
     engines: {node: '>= 0.4'}
@@ -1550,11 +1541,6 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0': {}
 
-  '@duckdb/duckdb-wasm@1.33.1-dev45.0':
-    dependencies:
-      apache-arrow: 17.0.0
-      qs: 6.15.3
-
   '@duckdb/duckdb-wasm@1.33.1-dev64.0':
     dependencies:
       apache-arrow: 17.0.0
@@ -2080,11 +2066,6 @@ snapshots:
   decimal.js@10.6.0: {}
 
   detect-libc@2.1.2: {}
-
-  duckdb-terminal@0.5.3(@duckdb/duckdb-wasm@1.33.1-dev45.0)(ghostty-web@0.4.0):
-    dependencies:
-      '@duckdb/duckdb-wasm': 1.33.1-dev45.0
-      ghostty-web: 0.4.0
 
   dunder-proto@1.0.1:
     dependencies:
