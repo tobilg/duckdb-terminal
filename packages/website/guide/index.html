@@ -1309,6 +1309,11 @@
         <a href="#duckdb-features" class="guide-nav-link">DuckDB Features</a>
         <a href="#data-analysis" class="guide-nav-link">Data Analysis</a>
         <a href="#external-data" class="guide-nav-link">External Data</a>
+        
+        <div class="guide-nav-title">Advanced</div>
+        <a href="#extensions" class="guide-nav-link">Extensions</a>
+        <a href="#cloud-storage" class="guide-nav-link">Cloud Storage</a>
+        <a href="#memory" class="guide-nav-link">Memory &amp; Threads</a>
       </nav>
 
       <div class="guide-content-wrapper">
@@ -1484,7 +1489,7 @@
                 <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Clear from cursor to end of line</td></tr>
                 <tr><td><kbd>Ctrl</kbd>+<kbd>U</kbd></td><td>Clear entire line</td></tr>
                 <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>Paste from clipboard</td></tr>
-                <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Cancel current input</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Clear the current input line (does not cancel a running query)</td></tr>
               </tbody>
             </table>
 
@@ -2004,6 +2009,84 @@
             </div>
           </section>
 
+          <!-- Extensions -->
+          <section id="extensions" class="guide-section">
+            <h2>Extensions</h2>
+            <p>DuckDB extensions can be installed and loaded at runtime, directly from the terminal.</p>
+
+            <pre><code><span class="keyword">INSTALL</span> iceberg; <span class="keyword">LOAD</span> iceberg;
+<span class="keyword">INSTALL</span> httpfs; <span class="keyword">LOAD</span> httpfs;</code></pre>
+
+            <p>To see which extensions the current build offers:</p>
+
+            <pre><code><span class="keyword">SELECT</span> extension_name, installed, loaded
+<span class="keyword">FROM</span> <span class="function">duckdb_extensions</span>()
+<span class="keyword">ORDER BY</span> 1;</code></pre>
+
+            <p>Available extensions include <code>iceberg</code>, <code>delta</code>, <code>ducklake</code>, <code>httpfs</code>, <code>aws</code>, <code>azure</code>, <code>avro</code>, <code>spatial</code>, <code>fts</code>, <code>json</code>, <code>excel</code>, <code>lance</code>, <code>vortex</code>, <code>unity_catalog</code> and <code>motherduck</code>.</p>
+
+            <h3>Apache Iceberg</h3>
+            <pre><code><span class="keyword">INSTALL</span> iceberg; <span class="keyword">LOAD</span> iceberg;
+
+<span class="comment">-- Read an Iceberg table</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">iceberg_scan</span>(<span class="string">'s3://bucket/warehouse/db/table'</span>);
+
+<span class="comment">-- Inspect snapshots and metadata</span>
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">iceberg_snapshots</span>(<span class="string">'s3://bucket/warehouse/db/table'</span>);</code></pre>
+          </section>
+
+          <!-- Cloud Storage -->
+          <section id="cloud-storage" class="guide-section">
+            <h2>Cloud Storage (S3 / R2)</h2>
+            <p>With the <code>httpfs</code> extension the terminal can query objects in S3-compatible storage, including Cloudflare R2, with no backend involved.</p>
+
+            <h3>Amazon S3</h3>
+            <pre><code><span class="keyword">INSTALL</span> httpfs; <span class="keyword">LOAD</span> httpfs;
+
+<span class="keyword">CREATE SECRET</span> (
+    <span class="keyword">TYPE</span> s3,
+    KEY_ID <span class="string">'AKIA...'</span>,
+    SECRET <span class="string">'...'</span>,
+    REGION <span class="string">'eu-central-1'</span>
+);
+
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">read_parquet</span>(<span class="string">'s3://my-bucket/data/*.parquet'</span>);</code></pre>
+
+            <h3>Cloudflare R2</h3>
+            <pre><code><span class="keyword">CREATE SECRET</span> (
+    <span class="keyword">TYPE</span> r2,
+    KEY_ID <span class="string">'...'</span>,
+    SECRET <span class="string">'...'</span>,
+    ACCOUNT_ID <span class="string">'...'</span>
+);
+
+<span class="keyword">SELECT</span> * <span class="keyword">FROM</span> <span class="function">read_parquet</span>(<span class="string">'r2://my-bucket/data.parquet'</span>);</code></pre>
+
+            <div class="info-box warning">
+              <p><strong>Note:</strong> The bucket must allow cross-origin requests from this site and support HTTP Range requests. Secrets created this way live only in the current browser session and are not persisted.</p>
+            </div>
+          </section>
+
+          <!-- Memory and Threads -->
+          <section id="memory" class="guide-section">
+            <h2>Memory &amp; Threads</h2>
+
+            <h3>Memory limit</h3>
+            <p>DuckDB WASM starts with a memory limit of roughly 3.1 GiB. You can lower it so that runaway queries fail fast instead of growing the browser's memory footprint:</p>
+
+            <pre><code><span class="comment">-- Check the current limit</span>
+<span class="keyword">SELECT</span> <span class="function">current_setting</span>(<span class="string">'memory_limit'</span>);
+
+<span class="comment">-- Lower it</span>
+<span class="keyword">SET</span> memory_limit = <span class="string">'1GB'</span>;</code></pre>
+
+            <p>A query that exceeds the limit fails with an <code>Out of Memory Error</code> and the session stays usable. The database is in-memory only, so nothing can be spilled to disk.</p>
+
+            <h3>Threads</h3>
+            <div class="info-box warning">
+              <p><strong>Note:</strong> The terminal ships a single-threaded DuckDB WASM build. <code>SET threads = N</code> returns <em>"DuckDB was compiled without threads!"</em>, and queries always run on a single thread.</p>
+            </div>
+          </section>
         </main>
       </div>
 
