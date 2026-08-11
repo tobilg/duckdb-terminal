@@ -91,10 +91,16 @@ npx vitest -t "formatTable"
 
 ## Browser Requirements
 
-Requires SharedArrayBuffer, which needs these headers in production:
+The default DuckDB-Wasm bundle is single-threaded and does not require
+`SharedArrayBuffer`. Opt-in multithreading requires a COI bundle,
+`maximumThreads > 1`, WebAssembly threads, and these headers:
 ```
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-Vite dev server sets these automatically.
+The hosted website intentionally uses the default one-thread EH/MVP bundle and
+does not set cross-origin isolation headers. This keeps DuckDB-Wasm's dynamic
+extensions, including Parquet, available while threaded extension artifacts
+remain incompatible upstream. Library consumers can still opt into a COI
+bundle explicitly and must serve its assets from the page's origin.

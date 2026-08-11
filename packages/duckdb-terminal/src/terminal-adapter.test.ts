@@ -11,7 +11,7 @@ vi.mock('ghostty-web', () => ({
     return {
       loadAddon: vi.fn(),
       open: vi.fn(),
-      write: vi.fn(),
+      write: vi.fn().mockImplementation((_text: string, callback?: () => void) => callback?.()),
       writeln: vi.fn(),
       focus: vi.fn(),
       dispose: vi.fn(),
@@ -103,6 +103,16 @@ describe('TerminalAdapter', () => {
       await adapter.init(container);
       adapter.writeln('Hello');
       // The mock terminal's writeln should have been called
+    });
+
+    it('should resolve async writes through the terminal callback', async () => {
+      await adapter.init(container);
+      const internals = adapter as unknown as {
+        terminal: { write: ReturnType<typeof vi.fn> };
+      };
+
+      await expect(adapter.writeAsync('Hello')).resolves.toBeUndefined();
+      expect(internals.terminal.write).toHaveBeenCalledWith('Hello', expect.any(Function));
     });
 
     it('should clear terminal', async () => {

@@ -1,3 +1,5 @@
+import type { DuckDBBundles } from '@duckdb/duckdb-wasm';
+
 /**
  * Configuration options for creating a DuckDB terminal.
  *
@@ -17,10 +19,12 @@
  *   theme: 'dark',
  *   storage: 'opfs',
  *   databasePath: '/mydata.duckdb',
+ *   maximumThreads: 1,
  *   welcomeMessage: true,
  *   prompt: 'SQL> ',
  *   continuationPrompt: '... ',
  *   linkDetection: true,
+ *   exactRowCount: false,
  * };
  * ```
  */
@@ -59,6 +63,21 @@ export interface TerminalConfig {
    */
   databasePath?: string;
   /**
+   * Maximum number of DuckDB execution threads.
+   *
+   * Values greater than 1 require `duckdbBundles` with a compatible COI
+   * bundle and a cross-origin-isolated page. Multithreading remains opt-in to
+   * avoid downloading the larger experimental bundle by default.
+   * @defaultValue 1
+   */
+  maximumThreads?: number;
+  /**
+   * DuckDB-Wasm bundle manifest used during feature-based bundle selection.
+   * A manifest with a `coi` entry is required when `maximumThreads` is greater
+   * than 1.
+   */
+  duckdbBundles?: DuckDBBundles;
+  /**
    * Whether to display the welcome message on startup.
    * @defaultValue true
    */
@@ -89,6 +108,18 @@ export interface TerminalConfig {
    * @defaultValue false
    */
   enableCharts?: boolean;
+  /**
+   * Maximum number of rows displayed in a single terminal result page.
+   * The terminal starts with this page size, and `.pagesize 0` resets to it.
+   * @defaultValue 1000
+   */
+  maxDisplayRows?: number;
+  /**
+   * Compute an exact result row count before fetching the first page.
+   * This can substantially increase work for expensive queries and is disabled by default.
+   * @defaultValue false
+   */
+  exactRowCount?: boolean;
 }
 
 /**
@@ -221,10 +252,27 @@ export interface QueryResult {
   columnTypes?: string[];
   /** Row data as a 2D array */
   rows: unknown[][];
-  /** Total number of rows returned */
+  /** Number of rows present in {@link rows} */
   rowCount: number;
   /** Query execution time in milliseconds */
   duration: number;
+  /** Pagination metadata for terminal-managed result pages */
+  pagination?: {
+    /** Current page number (1-based) */
+    page: number;
+    /** Maximum rows in each page */
+    pageSize: number;
+    /** Whether a previous page is available */
+    hasPreviousPage: boolean;
+    /** Whether a next page is available */
+    hasNextPage: boolean;
+    /** Exact number of rows, once known */
+    totalRows?: number;
+    /** Exact number of result pages, once known */
+    totalPages?: number;
+  };
+  /** Whether additional rows were omitted when exact pagination was unavailable */
+  truncated?: boolean;
 }
 
 /**
@@ -280,6 +328,11 @@ export interface TerminalInterface {
    * @returns The query result, or null if an error occurred
    */
   executeSQL(sql: string): Promise<QueryResult | null>;
+  /**
+   * Requests cancellation of the currently executing query.
+   * @returns Whether a new cancellation request was accepted
+   */
+  cancelQuery(): Promise<boolean>;
   /**
    * Sets the terminal theme.
    * @param theme - The theme to apply ('dark' or 'light')

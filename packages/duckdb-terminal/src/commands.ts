@@ -14,6 +14,7 @@ import type { LinkProvider } from './utils/link-provider';
 import { formatTable, formatCSV, formatTSV, formatJSON } from './utils/table-formatter';
 import { copyToClipboard } from './utils/clipboard';
 import { formatFileSize, pickFiles } from './utils/file-handler';
+import { parsePageSize } from './pagination';
 import * as vt100 from './utils/vt100';
 
 /**
@@ -69,6 +70,8 @@ export interface CommandContext {
   getPageSize: () => number;
   /** Set page size */
   setPageSize: (size: number) => void;
+  /** Maximum safe result page size */
+  getMaxDisplayRows?: () => number;
   /** Get current prompt */
   getPrompt: () => string;
   /** Get current continuation prompt */
@@ -182,8 +185,8 @@ export function createCommands(ctx: CommandContext): Map<string, Command> {
 
   commands.set('.pagesize', {
     name: '.pagesize',
-    description: 'Enable pagination for large results (default: off)',
-    usage: '.pagesize <number> (0 = disabled)',
+    description: 'Set result page size (0 resets to the safe maximum)',
+    usage: '.pagesize <number> (0 = reset)',
     handler: (args) => cmdPageSize(args, ctx),
   });
 
@@ -427,25 +430,22 @@ function cmdLinks(args: string[], ctx: CommandContext): void {
 }
 
 function cmdPageSize(args: string[], ctx: CommandContext): void {
+  const maxDisplayRows = ctx.getMaxDisplayRows?.() ?? 1_000;
   if (args.length === 0) {
     const pageSize = ctx.getPageSize();
-    if (pageSize === 0) {
-      ctx.writeln('Pagination is disabled (showing all rows)');
-    } else {
-      ctx.writeln(`Page size: ${pageSize} rows`);
-    }
+    ctx.writeln(`Page size: ${pageSize} rows (maximum: ${maxDisplayRows})`);
     return;
   }
-  const size = parseInt(args[0], 10);
-  if (isNaN(size) || size < 0) {
-    ctx.writeln('Usage: .pagesize <number> (0 = no pagination)');
+  const parsed = parsePageSize(args[0], maxDisplayRows);
+  if (!parsed) {
+    ctx.writeln(`Usage: .pagesize <number> (0-${maxDisplayRows})`);
     return;
   }
-  ctx.setPageSize(size);
-  if (size === 0) {
-    ctx.writeln('Pagination disabled (will show all rows)');
+  ctx.setPageSize(parsed.pageSize);
+  if (parsed.reset) {
+    ctx.writeln(`Page size reset to ${maxDisplayRows} rows`);
   } else {
-    ctx.writeln(`Page size set to ${size} rows`);
+    ctx.writeln(`Page size set to ${parsed.pageSize} rows`);
   }
 }
 

@@ -368,6 +368,17 @@ export function formatTable(
   rows: unknown[][],
   options: TableOptions = {}
 ): string {
+  return Array.from(formatTableLines(columns, rows, options)).join('\n');
+}
+
+/**
+ * Yield an ASCII table one line at a time.
+ */
+export function* formatTableLines(
+  columns: string[],
+  rows: unknown[][],
+  options: TableOptions = {}
+): IterableIterator<string> {
   const {
     maxColumnWidth = DEFAULT_MAX_COLUMN_WIDTH,
     maxWidth,
@@ -378,7 +389,7 @@ export function formatTable(
   } = options;
 
   if (columns.length === 0) {
-    return '';
+    return;
   }
 
   const columnWidthCap = maxColumnWidth > 0 ? maxColumnWidth : Number.MAX_SAFE_INTEGER;
@@ -404,21 +415,18 @@ export function formatTable(
     alignByType && isRightAlignedType(columnTypes?.[index]) ? 'right' : 'left'
   );
 
-  // Build table
-  const lines: string[] = [];
-
   // Top border
-  lines.push('\u250c' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u252c') + '\u2510');
+  yield '\u250c' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u252c') + '\u2510';
 
   // Header row
-  lines.push(
+  yield (
     '\u2502' +
       columns.map((col, i) => ' ' + alignCell(col, widths[i], 'center') + ' ').join('\u2502') +
       '\u2502'
   );
 
   if (showTypes) {
-    lines.push(
+    yield (
       '\u2502' +
         typeLabels.map((type, i) => ' ' + alignCell(type, widths[i], 'center') + ' ').join('\u2502') +
         '\u2502'
@@ -426,11 +434,11 @@ export function formatTable(
   }
 
   // Header separator
-  lines.push('\u251c' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u253c') + '\u2524');
+  yield '\u251c' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u253c') + '\u2524';
 
   // Data rows
   for (const row of formattedRows) {
-    lines.push(
+    yield (
       '\u2502' +
         columns.map((_, i) => ' ' + alignCell(row[i] ?? '', widths[i], dataAlignments[i]) + ' ').join('\u2502') +
         '\u2502'
@@ -438,22 +446,23 @@ export function formatTable(
   }
 
   // Bottom border
-  lines.push('\u2514' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u2534') + '\u2518');
-
-  return lines.join('\n');
+  yield '\u2514' + widths.map((w) => '\u2500'.repeat(w + 2)).join('\u2534') + '\u2518';
 }
 
 /**
  * Format query results as CSV
  */
 export function formatCSV(columns: string[], rows: unknown[][]): string {
-  if (columns.length === 0) {
-    return '';
-  }
+  return Array.from(formatCSVLines(columns, rows)).join('\n');
+}
 
-  const lines = [formatCSVHeader(columns)];
-  lines.push(...formatCSVRows(rows));
-  return lines.join('\n');
+export function* formatCSVLines(
+  columns: string[],
+  rows: unknown[][]
+): IterableIterator<string> {
+  if (columns.length === 0) return;
+  yield formatCSVHeader(columns);
+  for (const row of rows) yield formatCSVRow(row);
 }
 
 export function formatCSVHeader(columns: string[]): string {
@@ -472,13 +481,16 @@ export function formatCSVRows(rows: unknown[][]): string[] {
  * Format query results as TSV (Tab-Separated Values)
  */
 export function formatTSV(columns: string[], rows: unknown[][]): string {
-  if (columns.length === 0) {
-    return '';
-  }
+  return Array.from(formatTSVLines(columns, rows)).join('\n');
+}
 
-  const lines = [formatTSVHeader(columns)];
-  lines.push(...formatTSVRows(rows));
-  return lines.join('\n');
+export function* formatTSVLines(
+  columns: string[],
+  rows: unknown[][]
+): IterableIterator<string> {
+  if (columns.length === 0) return;
+  yield formatTSVHeader(columns);
+  for (const row of rows) yield formatTSVRow(row);
 }
 
 export function formatTSVHeader(columns: string[]): string {
@@ -512,12 +524,29 @@ function escapeTSVValue(value: unknown): string {
  * cannot serialize natively.
  */
 export function formatJSON(columns: string[], rows: unknown[][]): string {
-  const objects = rows.map((row) => {
+  return Array.from(formatJSONLines(columns, rows)).join('\n');
+}
+
+export function* formatJSONLines(
+  columns: string[],
+  rows: unknown[][]
+): IterableIterator<string> {
+  if (rows.length === 0) {
+    yield '[]';
+    return;
+  }
+
+  yield '[';
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
     const obj: Record<string, unknown> = {};
-    columns.forEach((col, i) => {
-      obj[col] = row[i] ?? null;
+    columns.forEach((column, columnIndex) => {
+      obj[column] = rows[rowIndex][columnIndex] ?? null;
     });
-    return obj;
-  });
-  return JSON.stringify(objects, jsonSafeReplacer, 2);
+    const objectLines = JSON.stringify(obj, jsonSafeReplacer, 2).split('\n');
+    for (let lineIndex = 0; lineIndex < objectLines.length; lineIndex++) {
+      const comma = rowIndex < rows.length - 1 && lineIndex === objectLines.length - 1 ? ',' : '';
+      yield `  ${objectLines[lineIndex]}${comma}`;
+    }
+  }
+  yield ']';
 }

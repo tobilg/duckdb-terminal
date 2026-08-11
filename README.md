@@ -130,6 +130,12 @@ interface TerminalConfig {
   // Database path for OPFS storage
   databasePath?: string;
 
+  // Maximum DuckDB execution threads (default: 1)
+  maximumThreads?: number;
+
+  // DuckDB-Wasm bundle manifest. A `coi` entry is required for >1 thread.
+  duckdbBundles?: DuckDBBundles;
+
   // Show welcome message (default: true)
   // When enabled, displays loading progress during DuckDB initialization
   welcomeMessage?: boolean;
@@ -148,8 +154,62 @@ interface TerminalConfig {
 
   // Enable interactive charts feature (default: false)
   enableCharts?: boolean;
+
+  // Maximum rows shown per result page (default: 1000)
+  maxDisplayRows?: number;
+
+  // Eagerly count all result rows before page 1 (default: false)
+  exactRowCount?: boolean;
 }
 ```
+
+### Opt-in multithreading
+
+The terminal deliberately uses DuckDB-Wasm's smaller, single-threaded bundle by default. Setting `threads` from SQL cannot add thread support to that build. To enable multiple threads, provide the experimental COI bundle at initialization and set `maximumThreads`:
+
+```typescript
+import { createTerminal } from 'duckdb-terminal';
+import { getJsDelivrBundles, getPlatformFeatures } from '@duckdb/duckdb-wasm';
+
+const features = await getPlatformFeatures();
+const maximumThreads = Math.min(navigator.hardwareConcurrency || 2, 4);
+const canUseThreads =
+  maximumThreads > 1 &&
+  features.crossOriginIsolated &&
+  features.wasmExceptions &&
+  features.wasmSIMD &&
+  features.wasmThreads;
+
+await createTerminal({
+  container: '#terminal',
+  ...(canUseThreads
+    ? {
+        maximumThreads,
+        duckdbBundles: {
+          ...getJsDelivrBundles(),
+          coi: {
+            mainModule: '/duckdb/duckdb-coi.wasm',
+            mainWorker: '/duckdb/duckdb-browser-coi.worker.js',
+            pthreadWorker: '/duckdb/duckdb-browser-coi.pthread.worker.js',
+          },
+        },
+      }
+    : {}),
+});
+```
+
+Serve all three COI assets from the page's own origin. The page must also send these headers:
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Only the bundle selected for the current browser is downloaded. If `maximumThreads` is greater than 1 but DuckDB-Wasm cannot select the COI bundle, initialization fails immediately with an actionable error instead of failing later on `SET threads`.
+
+DuckDB-Wasm's published `wasm_threads` extensions currently cannot be loaded by the COI bundle because their memory is not linked as shared. This affects Parquet, JSON, spatial, and other dynamically loaded extensions. See [duckdb-wasm#2041](https://github.com/duckdb/duckdb-wasm/issues/2041) and [extension-ci-tools#391](https://github.com/duckdb/extension-ci-tools/issues/391). Applications opting into multithreading must either avoid those extensions or provide compatible custom builds.
+
+This repository's hosted demo intentionally uses the default single-threaded bundle so file import and extension autoloading remain available. It does not serve COI assets or enable cross-origin isolation.
 
 ## Terminal Commands
 
@@ -173,7 +233,7 @@ interface TerminalConfig {
 | `.links on\|off` | Toggle clickable URL detection |
 | `.mode table\|csv\|tsv\|json` | Set output format |
 | `.open` | Open file picker to load data files |
-| `.pagesize <n>` | Set pagination size (0 to disable) |
+| `.pagesize <n>` | Set result page size (0 resets to the safe maximum) |
 | `.prompt [primary [cont]]` | Get or set the command prompt |
 | `.reset` | Reset database and all settings to defaults |
 | `.schema <table>` | Show table schema |
@@ -417,7 +477,7 @@ Settings are persisted in localStorage:
 | `Ctrl+K` | Clear from cursor to end of line |
 | `Ctrl+U` | Clear entire line |
 | `Ctrl+V` | Paste from clipboard |
-| `Ctrl+C` | Cancel current input |
+| `Ctrl+C` | Cancel current input or running query |
 
 ### Pagination Mode
 
@@ -512,25 +572,29 @@ The copied content respects your current output mode, so you can:
 
 ### Pagination for Large Results
 
-For large result sets, enable pagination with `.pagesize`:
+Large result sets are paginated automatically, with 1,000 rows per page by default. Each page fetches one extra row to determine whether a next page exists, avoiding a full count before the first page. Use `.pagesize` to select a smaller page:
 
 ```sql
--- Enable pagination (50 rows per page)
+-- Use 50 rows per page
 .pagesize 50
 
 -- Run a query with many results
 SELECT * FROM large_table;
 
 -- Navigate pages:
--- n or Enter - next page
--- p - previous page
+-- n or Down Arrow - next page
+-- p or Up Arrow - previous page
 -- 1-9 - jump to page number
 -- q - quit pagination
 ```
 
-Set `.pagesize 0` to disable pagination and show all results at once.
+Set `.pagesize 0` to restore the configured safe maximum (`maxDisplayRows`, 1,000 by default). Unlimited terminal rendering is intentionally not available because it can exhaust browser memory or overwhelm the terminal renderer.
 
-**Note:** Queries that already contain `LIMIT` or `OFFSET` clauses bypass pagination, giving you full control over result size.
+Queries that already contain `LIMIT` or `OFFSET` are wrapped safely, so their result can still be paginated without changing their meaning. Statements that cannot be wrapped are streamed only until the safe maximum and are marked as truncated when more rows exist.
+
+The terminal reports the current page and whether previous or next pages exist. Exact totals become available automatically when the last page is reached. Set `exactRowCount: true` if your application requires exact totals before page 1; this runs a separate `COUNT(*)` query and can substantially increase work for expensive queries.
+
+Programmatic `executeSQL()` calls, `queryEnd` events, `.copy`, `.download`, and charts use the current page. The returned `QueryResult.pagination` object always reports page navigation state and includes `totalRows` and `totalPages` once known.
 
 ## Custom Themes
 
@@ -761,9 +825,10 @@ const suggestions = await db.getCompletions('SEL', 3);
 ## Browser Requirements
 
 - Modern browser with WebAssembly support
-- SharedArrayBuffer (requires COOP/COEP headers)
+- The default single-threaded build does not require `SharedArrayBuffer` or cross-origin isolation
+- Multithreading requires `SharedArrayBuffer`, WebAssembly threads, a COI bundle, and COOP/COEP headers
 
-For development, Vite automatically sets the required headers. For production, configure your server:
+Embedding applications that enable multithreading must configure their development and production servers with the isolation headers:
 
 ```
 Cross-Origin-Opener-Policy: same-origin

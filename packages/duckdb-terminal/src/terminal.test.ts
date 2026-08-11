@@ -10,8 +10,8 @@ vi.mock('ghostty-web', () => ({
     return {
       loadAddon: vi.fn(),
       open: vi.fn(),
-      write: vi.fn(),
-      writeln: vi.fn(),
+      write: vi.fn().mockImplementation((_text: string, callback?: () => void) => callback?.()),
+      writeln: vi.fn().mockImplementation((_text: string, callback?: () => void) => callback?.()),
       focus: vi.fn(),
       dispose: vi.fn(),
       onData: vi.fn(),
@@ -40,6 +40,16 @@ vi.mock('./database', () => ({
         rowCount: 0,
         duration: 0,
       }),
+      executeQueryLimited: vi.fn().mockResolvedValue({
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        duration: 0,
+      }),
+      cancelActiveQuery: vi.fn().mockResolvedValue(false),
+      canPaginateQuery: vi.fn().mockResolvedValue(true),
+      getQueryRowCount: vi.fn().mockResolvedValue(1),
+      resetSettings: vi.fn().mockResolvedValue({ resetCount: 0, restarted: false }),
       streamQuery: vi.fn().mockResolvedValue({
         columns: [],
         columnTypes: [],
@@ -67,12 +77,14 @@ vi.mock('./utils/history', () => ({
       previous: vi.fn().mockReturnValue(null),
       next: vi.fn().mockReturnValue(null),
       getAll: vi.fn().mockResolvedValue([]),
+      reset: vi.fn(),
     };
   }),
 }));
 
 // Import after mocking
 import { DuckDBTerminal } from './terminal';
+import { Database } from './database';
 import { darkTheme } from './themes';
 import type { QueryResult } from './types';
 
@@ -80,27 +92,105 @@ function stripAnsi(text: string): string {
   return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
 }
 
-async function* rowBatches(batches: unknown[][][]): AsyncIterable<unknown[][]> {
-  for (const batch of batches) {
-    yield batch;
-  }
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function getTerminalInternals(terminal: DuckDBTerminal) {
   return terminal as unknown as {
+    state: string;
     outputMode: 'table' | 'csv' | 'tsv' | 'json';
     lastQueryResult: QueryResult | null;
+    maxDisplayRows: number;
+    exactRowCount: boolean;
+    pageSize: number;
+    pagination: {
+      isActive: () => boolean;
+    };
     database: {
       executeQuery: ReturnType<typeof vi.fn>;
+      executeQueryLimited: ReturnType<typeof vi.fn>;
+      cancelActiveQuery: ReturnType<typeof vi.fn>;
+      canPaginateQuery: ReturnType<typeof vi.fn>;
+      getQueryRowCount: ReturnType<typeof vi.fn>;
+      resetSettings: ReturnType<typeof vi.fn>;
       streamQuery: ReturnType<typeof vi.fn>;
     };
     terminalAdapter: {
+      writeAsync: (text: string) => Promise<void>;
       terminal: {
         cols: number;
       };
     };
   };
 }
+
+describe('DuckDBTerminal result limits', () => {
+  it('should forward DuckDB bundle and thread options to the database', () => {
+    const duckdbBundles = {
+      mvp: { mainModule: 'mvp.wasm', mainWorker: 'mvp.worker.js' },
+      coi: {
+        mainModule: 'coi.wasm',
+        mainWorker: 'coi.worker.js',
+        pthreadWorker: 'coi.pthread.worker.js',
+      },
+    };
+
+    new DuckDBTerminal({
+      container: document.createElement('div'),
+      maximumThreads: 4,
+      duckdbBundles,
+    });
+
+    expect(Database).toHaveBeenLastCalledWith({
+      storage: 'memory',
+      databasePath: undefined,
+      maximumThreads: 4,
+      bundles: duckdbBundles,
+    });
+  });
+
+  it('should use a configured positive row cap as the initial page size', () => {
+    const terminal = new DuckDBTerminal({
+      container: document.createElement('div'),
+      welcomeMessage: false,
+      maxDisplayRows: 250,
+    });
+
+    const internals = getTerminalInternals(terminal);
+    expect(internals.maxDisplayRows).toBe(250);
+    expect(internals.pageSize).toBe(250);
+  });
+
+  it('should keep eager exact counts opt-in', () => {
+    const defaultTerminal = new DuckDBTerminal({
+      container: document.createElement('div'),
+      welcomeMessage: false,
+    });
+    const exactTerminal = new DuckDBTerminal({
+      container: document.createElement('div'),
+      welcomeMessage: false,
+      exactRowCount: true,
+    });
+
+    expect(getTerminalInternals(defaultTerminal).exactRowCount).toBe(false);
+    expect(getTerminalInternals(exactTerminal).exactRowCount).toBe(true);
+  });
+
+  it.each([0, -1, 1.5])('should reject an unsafe maxDisplayRows value (%s)', (maxDisplayRows) => {
+    expect(() => new DuckDBTerminal({
+      container: document.createElement('div'),
+      welcomeMessage: false,
+      maxDisplayRows,
+    })).toThrow('maxDisplayRows must be a positive integer');
+  });
+});
 
 describe('DuckDBTerminal Events', () => {
   let terminal: DuckDBTerminal;
@@ -271,6 +361,88 @@ describe('DuckDBTerminal Events', () => {
   });
 });
 
+describe('DuckDBTerminal query cancellation', () => {
+  let terminal: DuckDBTerminal;
+  let container: HTMLElement;
+
+  beforeEach(async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    terminal = new DuckDBTerminal({
+      container,
+      theme: darkTheme,
+      welcomeMessage: false,
+    });
+    await terminal.start();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    terminal.destroy();
+    document.body.removeChild(container);
+  });
+
+  it('should request cancellation once and remain locked until the query settles', async () => {
+    const internals = getTerminalInternals(terminal) as ReturnType<typeof getTerminalInternals> & {
+      handleInput: (data: string) => void;
+    };
+    const pendingQuery = deferred<QueryResult>();
+    internals.database.executeQuery.mockImplementationOnce(() => pendingQuery.promise);
+    internals.database.cancelActiveQuery.mockResolvedValueOnce(true);
+    const queryEnd = vi.fn();
+    const error = vi.fn();
+    terminal.on('queryEnd', queryEnd);
+    terminal.on('error', error);
+
+    const query = terminal.executeSQL('SELECT * FROM slow_source;');
+    await vi.waitFor(() => expect(internals.database.executeQuery).toHaveBeenCalledOnce());
+
+    internals.handleInput('ignored');
+    internals.handleInput('\x03');
+    internals.handleInput('\x03');
+    await vi.waitFor(() => expect(internals.database.cancelActiveQuery).toHaveBeenCalledOnce());
+
+    expect(internals.state).toBe('executing');
+    pendingQuery.reject(new Error('pending query cancelled'));
+    await expect(query).resolves.toBeNull();
+
+    expect(internals.state).toBe('idle');
+    expect(queryEnd).toHaveBeenCalledWith(expect.objectContaining({
+      result: null,
+      error: 'Query cancelled',
+    }));
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('should lock input before history persistence yields', async () => {
+    const internals = getTerminalInternals(terminal) as ReturnType<typeof getTerminalInternals> & {
+      handleInput: (data: string) => void;
+      inputBuffer: {
+        getContent: () => string;
+      };
+      history: {
+        add: ReturnType<typeof vi.fn>;
+      };
+    };
+    const historyWrite = deferred<void>();
+    internals.history.add.mockImplementationOnce(() => historyWrite.promise);
+
+    internals.handleInput('SELECT 1;\r');
+    expect(internals.state).toBe('executing');
+    expect(internals.inputBuffer.getContent()).toBe('');
+
+    internals.handleInput('must not be buffered');
+    internals.handleInput('\x03');
+    expect(internals.inputBuffer.getContent()).toBe('');
+
+    historyWrite.resolve();
+    await vi.waitFor(() => expect(internals.state).toBe('idle'));
+
+    expect(internals.database.executeQuery).not.toHaveBeenCalled();
+    expect(internals.database.executeQueryLimited).not.toHaveBeenCalled();
+  });
+});
+
 describe('DuckDBTerminal Commands', () => {
   let terminal: DuckDBTerminal;
   let container: HTMLElement;
@@ -398,32 +570,136 @@ describe('DuckDBTerminal Commands', () => {
     });
   });
 
-  describe('CSV/TSV streaming output', () => {
-    it('should stream CSV output incrementally and preserve the final result', async () => {
+  describe('chunked result output', () => {
+    it('should use one-row lookahead without eagerly counting', async () => {
       const internals = getTerminalInternals(terminal);
-      const writeSpy = vi.spyOn(terminal, 'write');
-      let headerWasWrittenBeforeRows = false;
+      const rows = Array.from({ length: 1_001 }, (_, index) => [index]);
+      const queryEnd = vi.fn();
+      terminal.on('queryEnd', queryEnd);
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['value'],
+        columnTypes: ['INTEGER'],
+        rows,
+        rowCount: rows.length,
+        duration: 2,
+      });
+
+      const result = await terminal.executeSQL('SELECT i FROM range(2500) AS t(i);');
+
+      expect(internals.database.getQueryRowCount).not.toHaveBeenCalled();
+      expect(internals.database.canPaginateQuery).toHaveBeenCalledWith(
+        'SELECT i FROM range(2500) AS t(i)'
+      );
+      expect(internals.database.executeQuery).toHaveBeenCalledWith(
+        'SELECT * FROM (SELECT i FROM range(2500) AS t(i)) AS _page_subquery LIMIT 1001 OFFSET 0'
+      );
+      expect(result?.rows).toHaveLength(1_000);
+      expect(result?.pagination).toEqual({
+        page: 1,
+        pageSize: 1_000,
+        hasPreviousPage: false,
+        hasNextPage: true,
+      });
+      expect(internals.lastQueryResult).toBe(result);
+      expect(internals.pagination.isActive()).toBe(true);
+      expect(internals.state).toBe('paginating');
+      expect(queryEnd).toHaveBeenCalledWith(expect.objectContaining({ result }));
+    });
+
+    it('should eagerly count only when exactRowCount is enabled', async () => {
+      const internals = getTerminalInternals(terminal);
+      internals.exactRowCount = true;
+      internals.database.getQueryRowCount.mockResolvedValueOnce(2_500);
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['value'],
+        columnTypes: ['INTEGER'],
+        rows: Array.from({ length: 1_000 }, (_, index) => [index]),
+        rowCount: 1_000,
+        duration: 2,
+      });
+
+      const result = await terminal.executeSQL('SELECT i FROM range(2500) AS t(i);');
+
+      expect(internals.database.getQueryRowCount).toHaveBeenCalledWith(
+        'SELECT i FROM range(2500) AS t(i)'
+      );
+      expect(internals.database.canPaginateQuery).not.toHaveBeenCalled();
+      expect(internals.database.executeQuery).toHaveBeenCalledWith(
+        'SELECT * FROM (SELECT i FROM range(2500) AS t(i)) AS _page_subquery LIMIT 1000 OFFSET 0'
+      );
+      expect(result?.pagination).toEqual({
+        page: 1,
+        pageSize: 1_000,
+        hasPreviousPage: false,
+        hasNextPage: true,
+        totalRows: 2_500,
+        totalPages: 3,
+      });
+    });
+
+    it('should bound and mark results when exact pagination is unavailable', async () => {
+      const internals = getTerminalInternals(terminal);
+      internals.database.canPaginateQuery.mockResolvedValueOnce(false);
+      internals.database.executeQueryLimited.mockResolvedValueOnce({
+        columns: ['status'],
+        columnTypes: ['VARCHAR'],
+        rows: [['ok']],
+        rowCount: 1,
+        duration: 1,
+        truncated: true,
+      });
+
+      const result = await terminal.executeSQL('PRAGMA some_table_function;');
+      const output = stripAnsi(mockWriteln.mock.calls.map((call) => call[0]).join('\n'));
+
+      expect(internals.database.executeQueryLimited).toHaveBeenCalledWith(
+        'PRAGMA some_table_function;',
+        1_000
+      );
+      expect(internals.database.executeQuery).not.toHaveBeenCalled();
+      expect(result?.truncated).toBe(true);
+      expect(result?.pagination).toBeUndefined();
+      expect(output).toContain('pagination is unavailable');
+      expect(internals.pagination.isActive()).toBe(false);
+      expect(internals.state).toBe('idle');
+    });
+
+    it('should preserve query error events when the first page fails', async () => {
+      const internals = getTerminalInternals(terminal);
+      const queryEnd = vi.fn();
+      const error = vi.fn();
+      terminal.on('queryEnd', queryEnd);
+      terminal.on('error', error);
+      internals.database.executeQuery.mockRejectedValueOnce(new Error('page failed'));
+
+      const result = await terminal.executeSQL('SELECT * FROM broken_source;');
+
+      expect(result).toBeNull();
+      expect(queryEnd).toHaveBeenCalledWith(expect.objectContaining({
+        result: null,
+        error: 'page failed',
+      }));
+      expect(error).toHaveBeenCalledWith({ message: 'page failed', source: 'query' });
+      expect(internals.pagination.isActive()).toBe(false);
+      expect(internals.state).toBe('idle');
+    });
+
+    it('should write CSV output through the async terminal writer', async () => {
+      const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
 
       internals.outputMode = 'csv';
-      internals.database.streamQuery.mockResolvedValueOnce({
+      internals.database.executeQuery.mockResolvedValueOnce({
         columns: ['name', 'age'],
         columnTypes: ['VARCHAR', 'INTEGER'],
-        rowBatches: (async function*() {
-          headerWasWrittenBeforeRows = writeSpy.mock.calls
-            .map((call) => call[0])
-            .join('')
-            .includes('name,age');
-          yield [['Alice', 30]];
-          yield [['Bob, Jr.', 25]];
-        })(),
+        rows: [['Alice', 30], ['Bob, Jr.', 25]],
+        rowCount: 2,
+        duration: 1,
       });
 
       const result = await terminal.executeSQL('SELECT name, age FROM users;');
       const output = writeSpy.mock.calls.map((call) => call[0]).join('');
 
-      expect(internals.database.streamQuery).toHaveBeenCalledWith('SELECT name, age FROM users;');
-      expect(internals.database.executeQuery).not.toHaveBeenCalled();
-      expect(headerWasWrittenBeforeRows).toBe(true);
       expect(output).toContain('name,age\r\n');
       expect(output).toContain('Alice,30\r\n');
       expect(output).toContain('"Bob, Jr.",25\r\n');
@@ -434,27 +710,28 @@ describe('DuckDBTerminal Commands', () => {
       expect(internals.lastQueryResult?.rows).toEqual(result?.rows);
     });
 
-    it('should stream TSV output and preserve escaped rows', async () => {
+    it('should write TSV output and preserve escaped rows', async () => {
       const internals = getTerminalInternals(terminal);
-      const writeSpy = vi.spyOn(terminal, 'write');
+      const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
 
       internals.outputMode = 'tsv';
-      internals.database.streamQuery.mockResolvedValueOnce({
+      internals.database.executeQuery.mockResolvedValueOnce({
         columns: ['name', 'note'],
         columnTypes: ['VARCHAR', 'VARCHAR'],
-        rowBatches: rowBatches([[['Alice', 'hello\tworld']]]),
+        rows: [['Alice', 'hello\tworld']],
+        rowCount: 1,
+        duration: 1,
       });
 
       const result = await terminal.executeSQL('SELECT name, note FROM users;');
       const output = writeSpy.mock.calls.map((call) => call[0]).join('');
 
-      expect(internals.database.streamQuery).toHaveBeenCalled();
       expect(output).toContain('name\tnote\r\n');
       expect(output).toContain('Alice\thello world\r\n');
       expect(internals.lastQueryResult?.rows).toEqual(result?.rows);
     });
 
-    it('should keep table and JSON modes on the materialized query path', async () => {
+    it('should use the same materialized page path for table and JSON', async () => {
       const internals = getTerminalInternals(terminal);
 
       internals.outputMode = 'table';
@@ -481,8 +758,84 @@ describe('DuckDBTerminal Commands', () => {
       expect(internals.database.executeQuery).toHaveBeenCalledTimes(2);
     });
 
+    it('should render canonical EXPLAIN output verbatim in table mode', async () => {
+      const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
+      const plan = [
+        '┌── ORDER_BY ──┐',
+        '│ count_star() DESC │',
+        '└─ HASH_GROUP_BY ─┘',
+      ].join('\n');
+      internals.outputMode = 'table';
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['explain_key', 'explain_value'],
+        columnTypes: ['VARCHAR', 'VARCHAR'],
+        rows: [['physical_plan', plan]],
+        rowCount: 1,
+        duration: 1,
+      });
+
+      const result = await terminal.executeSQL(
+        '-- inspect the plan\n/* leading block comment */\nEXPLAIN SELECT 1;'
+      );
+      const output = stripAnsi(writeSpy.mock.calls.map((call) => call[0]).join(''));
+      const footer = stripAnsi(mockWriteln.mock.calls.map((call) => call[0]).join('\n'));
+
+      expect(output).toContain(plan.replace(/\n/g, '\r\n'));
+      expect(output).not.toContain('explain_key');
+      expect(output).not.toContain('explain_value');
+      expect(output).not.toContain('…');
+      expect(footer).not.toContain('1 row');
+      expect(result?.rows).toEqual([['physical_plan', plan]]);
+    });
+
+    it('should preserve valid JSON serialization for EXPLAIN results', async () => {
+      const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
+      const plan = 'ORDER_BY\nHASH_GROUP_BY';
+      internals.outputMode = 'json';
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['explain_key', 'explain_value'],
+        columnTypes: ['VARCHAR', 'VARCHAR'],
+        rows: [['physical_plan', plan]],
+        rowCount: 1,
+        duration: 1,
+      });
+
+      await terminal.executeSQL('EXPLAIN SELECT 1;');
+      const output = writeSpy.mock.calls.map((call) => call[0]).join('');
+
+      expect(output).toContain('"explain_key": "physical_plan"');
+      expect(output).toContain('"explain_value": "ORDER_BY\\nHASH_GROUP_BY"');
+      expect(() => JSON.parse(output.trim())).not.toThrow();
+    });
+
+    it('should not use EXPLAIN rendering for an ordinary canonical-shaped result', async () => {
+      const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
+      internals.outputMode = 'table';
+      internals.database.executeQuery.mockResolvedValueOnce({
+        columns: ['explain_key', 'explain_value'],
+        columnTypes: ['VARCHAR', 'VARCHAR'],
+        rows: [['physical_plan', 'ordinary query value']],
+        rowCount: 1,
+        duration: 1,
+      });
+
+      await terminal.executeSQL(
+        "SELECT 'physical_plan' AS explain_key, 'ordinary query value' AS explain_value;"
+      );
+      const output = stripAnsi(writeSpy.mock.calls.map((call) => call[0]).join(''));
+      const footer = stripAnsi(mockWriteln.mock.calls.map((call) => call[0]).join('\n'));
+
+      expect(output).toContain('explain_key');
+      expect(output).toContain('explain_value');
+      expect(footer).toContain('1 row');
+    });
+
     it('should render table output with terminal width and column types', async () => {
       const internals = getTerminalInternals(terminal);
+      const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
       internals.outputMode = 'table';
       internals.terminalAdapter.terminal.cols = 42;
       internals.database.executeQuery.mockResolvedValueOnce({
@@ -495,7 +848,7 @@ describe('DuckDBTerminal Commands', () => {
 
       await terminal.executeSQL('SELECT id, description FROM regions;');
 
-      const output = stripAnsi(mockWriteln.mock.calls.map((call) => call[0]).join('\n'));
+      const output = stripAnsi(writeSpy.mock.calls.map((call) => call[0]).join(''));
       const tableLines = output.split(/\r?\n/).filter((line) => /^[┌│├└]/.test(line));
 
       expect(output).toContain('integer');
@@ -568,12 +921,12 @@ describe('DuckDBTerminal Commands', () => {
       expect(output).toContain('Page size set to 50');
     });
 
-    it('should disable pagination with 0', async () => {
+    it('should reset pagination with 0', async () => {
       const cmd = (terminal as unknown as { commands: Map<string, { handler: (args: string[]) => Promise<void> }> }).commands;
       await cmd.get('.pagesize')?.handler(['0']);
 
       const output = mockWriteln.mock.calls.map(c => c[0]).join('\n');
-      expect(output).toContain('Pagination disabled');
+      expect(output).toContain('Page size reset to 1000');
     });
 
     it('should show error for invalid value', async () => {
@@ -584,12 +937,46 @@ describe('DuckDBTerminal Commands', () => {
       expect(output).toContain('Usage:');
     });
 
+    it('should reject partially numeric values', async () => {
+      const cmd = (terminal as unknown as { commands: Map<string, { handler: (args: string[]) => Promise<void> }> }).commands;
+      await cmd.get('.pagesize')?.handler(['50rows']);
+
+      const output = mockWriteln.mock.calls.map(c => c[0]).join('\n');
+      expect(output).toContain('Usage:');
+      expect(getTerminalInternals(terminal).pageSize).toBe(1_000);
+    });
+
     it('should show current page size when no argument', async () => {
       const cmd = (terminal as unknown as { commands: Map<string, { handler: (args: string[]) => Promise<void> }> }).commands;
       await cmd.get('.pagesize')?.handler([]);
 
       const output = mockWriteln.mock.calls.map(c => c[0]).join('\n');
-      expect(output).toContain('Pagination is disabled');
+      expect(output).toContain('Page size: 1000');
+    });
+  });
+
+  describe('.reset command', () => {
+    it('should restore DuckDB settings before reporting success', async () => {
+      const internals = getTerminalInternals(terminal);
+      const cmd = (terminal as unknown as { commands: Map<string, { handler: (args: string[]) => Promise<void> }> }).commands;
+
+      await cmd.get('.reset')?.handler([]);
+
+      expect(internals.database.resetSettings).toHaveBeenCalledWith({ recreateOnFailure: true });
+      const output = stripAnsi(mockWriteln.mock.calls.map(c => c[0]).join('\n'));
+      expect(output).toContain('settings restored to defaults');
+    });
+
+    it('should not report success when DuckDB settings cannot be reset', async () => {
+      const internals = getTerminalInternals(terminal);
+      const cmd = (terminal as unknown as { commands: Map<string, { handler: (args: string[]) => Promise<void> }> }).commands;
+      internals.database.resetSettings.mockRejectedValueOnce(new Error('restart failed'));
+
+      await cmd.get('.reset')?.handler([]);
+
+      const output = stripAnsi(mockWriteln.mock.calls.map(c => c[0]).join('\n'));
+      expect(output).toContain('Error during reset: restart failed');
+      expect(output).not.toContain('Reset complete');
     });
   });
 

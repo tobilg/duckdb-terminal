@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { highlightSQL, isSQLComplete, type DuckDBToken } from './syntax-highlight';
+import {
+  highlightSQL,
+  isExplainStatement,
+  isSQLComplete,
+  type DuckDBToken,
+} from './syntax-highlight';
 import { debounce } from './debounce';
 import { stripAnsiCodes, visibleLength } from './vt100';
 
@@ -165,6 +170,31 @@ WHERE id = 1;`;
 
     it('should return true for statement after block comment', () => {
       expect(isSQLComplete('SELECT * /* comment */ FROM users;')).toBe(true);
+    });
+  });
+
+  describe('isExplainStatement', () => {
+    it('should recognize EXPLAIN and EXPLAIN ANALYZE case-insensitively', () => {
+      expect(isExplainStatement('EXPLAIN SELECT 1;')).toBe(true);
+      expect(isExplainStatement('explain analyze select 1;')).toBe(true);
+    });
+
+    it('should skip leading whitespace and SQL comments', () => {
+      expect(isExplainStatement(`
+        -- inspect this query
+        /* optimizer output */
+        EXPLAIN SELECT 1;
+      `)).toBe(true);
+    });
+
+    it('should reject EXPLAIN text in comments, strings, and later tokens', () => {
+      expect(isExplainStatement('-- EXPLAIN\nSELECT 1;')).toBe(false);
+      expect(isExplainStatement("SELECT 'EXPLAIN';")).toBe(false);
+      expect(isExplainStatement('SELECT EXPLAIN FROM keywords;')).toBe(false);
+    });
+
+    it('should reject quoted identifiers named EXPLAIN', () => {
+      expect(isExplainStatement('"EXPLAIN";')).toBe(false);
     });
   });
 

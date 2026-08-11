@@ -17,6 +17,22 @@ export interface DatabaseOptions {
    * Defaults to ':memory:' for in-memory storage.
    */
   databasePath?: string;
+  /**
+   * Maximum number of DuckDB execution threads.
+   *
+   * Values greater than 1 require a compatible COI bundle and a page served
+   * with cross-origin isolation headers. The default bundle set is
+   * intentionally single-threaded, so callers opting into multithreading must
+   * also provide `bundles` with a `coi` entry.
+   *
+   * @defaultValue 1
+   */
+  maximumThreads?: number;
+  /**
+   * DuckDB-Wasm bundle manifest used during feature-based bundle selection.
+   * Omit this to use DuckDB-Wasm's default, single-threaded jsDelivr bundles.
+   */
+  bundles?: duckdb.DuckDBBundles;
 }
 
 /**
@@ -93,19 +109,53 @@ export interface StreamQueryResult {
   rowBatches: AsyncIterable<unknown[][]>;
 }
 
+export interface ResetSettingsResult {
+  /** Number of settings that differed from their initial values. */
+  resetCount: number;
+  /** Whether resetting required replacing the DuckDB instance. */
+  restarted: boolean;
+}
+
+export interface ResetSettingsOptions {
+  /**
+   * Recreate DuckDB if an in-place reset fails. Recreating an in-memory
+   * database discards its contents, so callers must opt in explicitly.
+   */
+  recreateOnFailure?: boolean;
+}
+
+type DatabaseSettingValue = string | null;
+type NormalizedDatabaseOptions = DatabaseOptions & {
+  storage: 'memory' | 'opfs';
+  databasePath: string;
+  maximumThreads: number;
+};
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
 export class Database {
   private db: duckdb.AsyncDuckDB | null = null;
   private conn: duckdb.AsyncDuckDBConnection | null = null;
+  private activeSentQuery: symbol | null = null;
   private worker: Worker | null = null;
   private initialized = false;
-  private options: DatabaseOptions;
+  private options: NormalizedDatabaseOptions;
   private poachedLoaded = false;
+  private initialSettings: Map<string, DatabaseSettingValue> | null = null;
 
   constructor(options: DatabaseOptions = {}) {
+    const maximumThreads = options.maximumThreads ?? 1;
+    if (!Number.isSafeInteger(maximumThreads) || maximumThreads <= 0) {
+      throw new RangeError('maximumThreads must be a positive integer');
+    }
+
     this.options = {
-      storage: 'memory',
-      databasePath: ':memory:',
       ...options,
+      storage: options.storage ?? 'memory',
+      databasePath: options.databasePath ?? ':memory:',
+      maximumThreads,
     };
   }
 
@@ -135,23 +185,50 @@ export class Database {
       return;
     }
 
-    // Get the appropriate bundle
-    const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
-    const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+    // DuckDB's default manifest intentionally excludes the experimental COI
+    // bundle. A caller must provide that bundle explicitly when opting into
+    // multithreading.
+    const bundles = this.options.bundles ?? duckdb.getJsDelivrBundles();
+    const bundle = await duckdb.selectBundle(bundles);
+    const maximumThreads = this.options.maximumThreads;
 
-    // Create worker
-    const workerUrl = URL.createObjectURL(
-      new Blob([`importScripts("${bundle.mainWorker}");`], {
-        type: 'text/javascript',
-      })
-    );
+    if (!bundle.mainWorker) {
+      throw new Error('The selected DuckDB bundle does not provide a main worker.');
+    }
 
-    this.worker = new Worker(workerUrl);
+    if (maximumThreads > 1 && !bundle.pthreadWorker) {
+      throw new Error(
+        `DuckDB multithreading was requested with maximumThreads=${maximumThreads}, ` +
+        'but no compatible COI bundle was selected. Provide a bundle manifest with a ' +
+        'coi entry and serve the page with COOP/COEP cross-origin isolation headers.'
+      );
+    }
+
+    // COI workers must retain their real script URL so Emscripten can pass it
+    // to pthread workers during bootstrap. Single-threaded CDN workers still
+    // need the blob/importScripts bridge because classic workers are subject
+    // to the same-origin restriction.
+    let workerUrl: string | undefined;
+    if (bundle.pthreadWorker) {
+      this.worker = new Worker(bundle.mainWorker);
+    } else {
+      workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], {
+          type: 'text/javascript',
+        })
+      );
+      this.worker = new Worker(workerUrl);
+    }
     const logger = new duckdb.VoidLogger();
     this.db = new duckdb.AsyncDuckDB(logger, this.worker);
 
-    await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    URL.revokeObjectURL(workerUrl);
+    try {
+      await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    } finally {
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+      }
+    }
 
     // Note: We intentionally do NOT use castBigIntToDouble here.
     // While it would simplify JSON serialization, it corrupts array values
@@ -161,23 +238,27 @@ export class Database {
       castDecimalToDouble: true,
     };
 
-    // Open database
-    if (this.options.storage === 'opfs' && this.options.databasePath) {
-      await this.db.open({
-        path: this.options.databasePath,
-        accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
-        query: queryConfig,
-      });
-    } else {
-      await this.db.open({
-        path: ':memory:',
-        query: queryConfig,
-      });
-    }
+    // Build the shared open configuration once so storage and threading
+    // options cannot drift between the in-memory and OPFS paths.
+    const useOPFS = this.options.storage === 'opfs' && Boolean(this.options.databasePath);
+    const openConfig: duckdb.DuckDBConfig = {
+      path: useOPFS ? this.options.databasePath : ':memory:',
+      query: queryConfig,
+      maximumThreads,
+      ...(useOPFS ? { accessMode: duckdb.DuckDBAccessMode.READ_WRITE } : {}),
+    };
+    await this.db.open(openConfig);
 
     // Create connection
     this.conn = await this.db.connect();
     this.initialized = true;
+
+    try {
+      this.initialSettings = await this.readSettings();
+    } catch (error) {
+      await this.close();
+      throw error;
+    }
   }
 
   /**
@@ -203,39 +284,121 @@ export class Database {
    * ```
    */
   async executeQuery(sql: string): Promise<QueryResult> {
+    return this.executeSentQuery(sql);
+  }
+
+  /**
+   * Executes a query while retaining at most `maxRows` rows.
+   *
+   * One additional row is consumed to determine whether the result was
+   * truncated. If it was, the remaining DuckDB stream is cancelled.
+   */
+  async executeQueryLimited(sql: string, maxRows: number): Promise<QueryResult> {
+    if (!this.conn) {
+      throw new Error('Database not initialized');
+    }
+    if (!Number.isInteger(maxRows) || maxRows <= 0) {
+      throw new RangeError('maxRows must be a positive integer');
+    }
+
+    return this.executeSentQuery(sql, maxRows);
+  }
+
+  /**
+   * Cancels the query currently being consumed through DuckDB's pending-query API.
+   *
+   * @returns Whether DuckDB accepted a cancellation request
+   */
+  async cancelActiveQuery(): Promise<boolean> {
+    if (!this.conn || !this.activeSentQuery) {
+      return false;
+    }
+
+    return this.conn.cancelSent();
+  }
+
+  private async executeSentQuery(sql: string, maxRows?: number): Promise<QueryResult> {
+    const startTime = performance.now();
+    const { reader, queryToken } = await this.startSentQuery(sql);
+
+    try {
+      const columns = reader.schema.fields.map((field) => field.name);
+      const columnTypes = reader.schema.fields.map((field) => String(field.type));
+      const rows: unknown[][] = [];
+      let truncated = false;
+
+      outer: for await (const batch of reader) {
+        const remainingRows = maxRows === undefined
+          ? Number.POSITIVE_INFINITY
+          : maxRows - rows.length + 1;
+        const batchRows = this.rowsFromBatch(batch, columns.length, remainingRows);
+        for (const row of batchRows) {
+          if (maxRows !== undefined && rows.length === maxRows) {
+            truncated = true;
+            break outer;
+          }
+          rows.push(row);
+        }
+      }
+
+      if (truncated) {
+        await this.cancelActiveQuery();
+      }
+
+      return {
+        columns,
+        columnTypes,
+        rows,
+        rowCount: rows.length,
+        duration: performance.now() - startTime,
+        truncated: truncated || undefined,
+      };
+    } finally {
+      this.finishSentQuery(queryToken);
+    }
+  }
+
+  /**
+   * Check whether a statement can be safely wrapped as a paginated subquery.
+   * Preparing a zero-row wrapper validates the shape without scanning the result.
+   */
+  async canPaginateQuery(sql: string): Promise<boolean> {
     if (!this.conn) {
       throw new Error('Database not initialized');
     }
 
-    const startTime = performance.now();
-    const result = await this.conn.query(sql);
-    const duration = performance.now() - startTime;
-
-    // Get column names and types
-    const columns = result.schema.fields.map((field) => field.name);
-    const columnTypes = result.schema.fields.map((field) => String(field.type));
-
-    // Get rows
-    const rows: unknown[][] = [];
-    for (let i = 0; i < result.numRows; i++) {
-      const row: unknown[] = [];
-      for (let j = 0; j < columns.length; j++) {
-        const column = result.getChildAt(j);
-        row.push(column?.get(i));
-      }
-      rows.push(row);
+    const pageSQL = `SELECT * FROM (${sql}) AS _page_subquery LIMIT 0`;
+    let statement: Awaited<ReturnType<duckdb.AsyncDuckDBConnection['prepare']>>;
+    try {
+      statement = await this.conn.prepare(pageSQL);
+    } catch {
+      return false;
     }
 
-    // DuckDB may return BigInt for numRows, convert to number
-    const numRows = typeof result.numRows === 'bigint' ? Number(result.numRows) : result.numRows;
+    await statement.close();
+    return true;
+  }
 
-    return {
-      columns,
-      columnTypes,
-      rows,
-      rowCount: numRows,
-      duration,
-    };
+  /**
+   * Return the exact row count when a statement can be used as a subquery.
+   * A null result means the statement should use bounded, non-pageable output.
+   */
+  async getQueryRowCount(sql: string): Promise<number | null> {
+    if (!this.conn) {
+      throw new Error('Database not initialized');
+    }
+
+    const countSQL = `SELECT COUNT(*) AS cnt FROM (${sql}) AS _count_subquery`;
+    try {
+      const result = await this.executeSentQuery(countSQL);
+      const value = result.rows[0]?.[0];
+      if (value === null || value === undefined) return null;
+      const count = Number(value);
+      if (!Number.isSafeInteger(count) || count < 0) return null;
+      return count;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -252,37 +415,71 @@ export class Database {
    * @throws Error if the SQL query is invalid or fails
    */
   async streamQuery(sql: string): Promise<StreamQueryResult> {
-    if (!this.conn) {
-      throw new Error('Database not initialized');
-    }
-
-    const reader = await this.conn.send(sql, true);
+    const { reader, queryToken } = await this.startSentQuery(sql);
     const columns = reader.schema.fields.map((field) => field.name);
     const columnTypes = reader.schema.fields.map((field) => String(field.type));
 
     return {
       columns,
       columnTypes,
-      rowBatches: this.readRowBatches(reader, columns.length),
+      rowBatches: this.readRowBatches(reader, columns.length, queryToken),
     };
+  }
+
+  private async startSentQuery(sql: string): Promise<{
+    reader: arrow.AsyncRecordBatchStreamReader;
+    queryToken: symbol;
+  }> {
+    if (!this.conn) {
+      throw new Error('Database not initialized');
+    }
+
+    const queryToken = Symbol('sent-query');
+    this.activeSentQuery = queryToken;
+    try {
+      const reader = await this.conn.send(sql, true);
+      await reader.open();
+      return { reader, queryToken };
+    } catch (error) {
+      this.finishSentQuery(queryToken);
+      throw error;
+    }
+  }
+
+  private finishSentQuery(queryToken: symbol): void {
+    if (this.activeSentQuery === queryToken) {
+      this.activeSentQuery = null;
+    }
   }
 
   private async *readRowBatches(
     reader: arrow.AsyncRecordBatchStreamReader,
-    columnCount: number
+    columnCount: number,
+    queryToken: symbol
   ): AsyncIterable<unknown[][]> {
-    for await (const batch of reader) {
-      const rows: unknown[][] = [];
-      for (let i = 0; i < batch.numRows; i++) {
-        const row: unknown[] = [];
-        for (let j = 0; j < columnCount; j++) {
-          const column = batch.getChildAt(j);
-          row.push(column?.get(i));
-        }
-        rows.push(row);
+    try {
+      for await (const batch of reader) {
+        yield this.rowsFromBatch(batch, columnCount);
       }
-      yield rows;
+    } finally {
+      this.finishSentQuery(queryToken);
     }
+  }
+
+  private rowsFromBatch(
+    batch: Pick<arrow.RecordBatch, 'numRows' | 'getChildAt'>,
+    columnCount: number,
+    maxRows: number = Number.POSITIVE_INFINITY
+  ): unknown[][] {
+    const rowCount = Math.min(batch.numRows, maxRows);
+    const vectors = Array.from({ length: columnCount }, (_, index) => batch.getChildAt(index));
+    const rows: unknown[][] = [];
+
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+      rows.push(vectors.map((column) => column?.get(rowIndex)));
+    }
+
+    return rows;
   }
 
   /**
@@ -700,6 +897,92 @@ export class Database {
   }
 
   /**
+   * Restores DuckDB configuration settings to the values present immediately
+   * after initialization.
+   *
+   * Only settings whose normalized values changed are reset. If DuckDB refuses
+   * an in-place reset (for example because configuration was locked), callers
+   * can opt into recreating the instance so global and session settings are
+   * both restored.
+   */
+  async resetSettings(options: ResetSettingsOptions = {}): Promise<ResetSettingsResult> {
+    if (!this.conn || !this.initialSettings) {
+      throw new Error('Database not initialized');
+    }
+
+    const initialSettings = this.initialSettings;
+    const poachedWasLoaded = this.poachedLoaded;
+    let changedSettings: string[] = [];
+
+    try {
+      const currentSettings = await this.readSettings();
+      changedSettings = [...currentSettings].flatMap(([name, value]) => {
+        const initialValue = initialSettings.get(name);
+        return !initialSettings.has(name) || initialValue !== value ? [name] : [];
+      });
+
+      for (const name of changedSettings) {
+        await this.conn.query(`RESET ${quoteIdentifier(name)}`);
+      }
+
+      if (changedSettings.length > 0) {
+        const resetSettings = await this.readSettings();
+        const restored = changedSettings.every((name) => {
+          if (!initialSettings.has(name)) {
+            // Extension settings discovered after initialization have no local
+            // baseline, so a successful DuckDB RESET is authoritative.
+            return true;
+          }
+          return resetSettings.get(name) === initialSettings.get(name);
+        });
+        if (!restored) {
+          throw new Error('DuckDB settings did not return to their initial values');
+        }
+      }
+
+      return { resetCount: changedSettings.length, restarted: false };
+    } catch (error) {
+      if (!options.recreateOnFailure) {
+        throw error;
+      }
+      await this.reinitialize(poachedWasLoaded);
+      return { resetCount: changedSettings.length, restarted: true };
+    }
+  }
+
+  private async readSettings(): Promise<Map<string, DatabaseSettingValue>> {
+    if (!this.conn) {
+      throw new Error('Database not initialized');
+    }
+
+    const result = await this.conn.query(
+      'SELECT name, value FROM duckdb_settings() ORDER BY name'
+    );
+    const names = result.getChildAt(0);
+    const values = result.getChildAt(1);
+    const settings = new Map<string, DatabaseSettingValue>();
+
+    for (let rowIndex = 0; rowIndex < result.numRows; rowIndex++) {
+      const name = names?.get(rowIndex);
+      if (name === null || name === undefined) {
+        continue;
+      }
+      const value = values?.get(rowIndex);
+      settings.set(String(name), value === null || value === undefined ? null : String(value));
+    }
+
+    return settings;
+  }
+
+  private async reinitialize(reloadPoached: boolean): Promise<void> {
+    await this.close();
+    await this.init();
+    if (reloadPoached) {
+      await this.loadPoachedExtension();
+    }
+  }
+
+  /**
    * Loads the poached extension for SQL tokenization.
    *
    * The poached extension provides tokenize_sql() which uses DuckDB's internal
@@ -868,6 +1151,9 @@ export class Database {
       this.worker.terminate();
       this.worker = null;
     }
+    this.activeSentQuery = null;
+    this.initialSettings = null;
+    this.poachedLoaded = false;
     this.initialized = false;
   }
 }

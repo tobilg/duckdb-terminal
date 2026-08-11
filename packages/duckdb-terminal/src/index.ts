@@ -38,7 +38,15 @@
  */
 
 import { DuckDBTerminal } from './terminal';
-import type { TerminalConfig, TerminalInterface, Theme, ThemeColors, TerminalEvents, TerminalEventListener } from './types';
+import type {
+  TerminalConfig,
+  TerminalInterface,
+  QueryResult,
+  Theme,
+  ThemeColors,
+  TerminalEvents,
+  TerminalEventListener,
+} from './types';
 
 /**
  * Creates and initializes a DuckDB terminal instance.
@@ -125,13 +133,28 @@ export async function embed(config: TerminalConfig): Promise<DuckDBTerminal> {
 }
 
 // Export types
-export type { TerminalConfig, TerminalInterface, Theme, ThemeColors, TerminalEvents, TerminalEventListener };
+export type {
+  TerminalConfig,
+  TerminalInterface,
+  QueryResult,
+  Theme,
+  ThemeColors,
+  TerminalEvents,
+  TerminalEventListener,
+};
 
 // Export classes for advanced usage
 export { DuckDBTerminal } from './terminal';
 export { TerminalAdapter } from './terminal-adapter';
 export { Database } from './database';
-export type { SQLToken, SQLError } from './database';
+export type {
+  DatabaseOptions,
+  SQLToken,
+  SQLError,
+  ResetSettingsOptions,
+  ResetSettingsResult,
+} from './database';
+export type { DuckDBBundles } from '@duckdb/duckdb-wasm';
 export { HistoryStore } from './utils/history';
 export { InputBuffer } from './utils/input-buffer';
 
@@ -143,7 +166,16 @@ export { PaginationHandler, type PaginationContext, type PaginationState } from 
 export { darkTheme, lightTheme, getTheme, getSavedTheme, saveTheme } from './themes';
 
 // Export utilities
-export { formatTable, formatCSV, formatTSV, formatJSON } from './utils/table-formatter';
+export {
+  formatTable,
+  formatTableLines,
+  formatCSV,
+  formatCSVLines,
+  formatTSV,
+  formatTSVLines,
+  formatJSON,
+  formatJSONLines,
+} from './utils/table-formatter';
 export { copyToClipboard, readFromClipboard, isClipboardAvailable } from './utils/clipboard';
 export { highlightSQL, isSQLComplete } from './utils/syntax-highlight';
 export type { DuckDBToken } from './utils/syntax-highlight';

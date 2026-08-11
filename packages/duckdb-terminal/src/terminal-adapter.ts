@@ -553,6 +553,19 @@ export class TerminalAdapter {
   }
 
   /**
+   * Writes a bounded output chunk and resolves on Ghostty's next render frame.
+   */
+  writeAsync(text: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.terminal) {
+        resolve();
+        return;
+      }
+      this.terminal.write(text, resolve);
+    });
+  }
+
+  /**
    * Writes text to the terminal followed by a newline.
    *
    * @param text - The text to write

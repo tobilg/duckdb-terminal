@@ -1291,6 +1291,7 @@
         <a href="#getting-started" class="guide-nav-link active">Introduction</a>
         <a href="#first-query" class="guide-nav-link">Your First Query</a>
         <a href="#multi-line" class="guide-nav-link">Multi-line Input</a>
+        <a href="#multithreading" class="guide-nav-link">Multithreading</a>
 
         <div class="guide-nav-title">Reference</div>
         <a href="#commands" class="guide-nav-link">Terminal Commands</a>
@@ -1374,6 +1375,15 @@
 <span class="keyword">FROM</span> users
 <span class="keyword">WHERE</span> active = <span class="keyword">true</span>
 <span class="keyword">ORDER BY</span> name;</code></pre>
+          </section>
+
+          <section id="multithreading" class="guide-section">
+            <h3>Multithreading</h3>
+            <p>DuckDB Terminal starts with the smaller single-threaded DuckDB-Wasm bundle by default. This avoids downloading the larger experimental threaded build when it is not needed.</p>
+            <p>Thread support is selected when the database starts, so <code>SET threads = 4</code> cannot enable it in a single-threaded build. An embedding application must opt in with a COI bundle and a <code>maximumThreads</code> value, and serve the page and bundle assets with cross-origin isolation enabled.</p>
+            <div class="info-box">
+              <p><strong>Hosted demo:</strong> This site intentionally uses one thread so Parquet and other dynamically loaded extensions remain available. Multithreading remains an explicit library option while <a href="https://github.com/duckdb/duckdb-wasm/issues/2041" target="_blank" rel="noopener">threaded extension loading is incompatible upstream</a>.</p>
+            </div>
           </section>
 
           <!-- Terminal Commands -->
@@ -1484,7 +1494,7 @@
                 <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Clear from cursor to end of line</td></tr>
                 <tr><td><kbd>Ctrl</kbd>+<kbd>U</kbd></td><td>Clear entire line</td></tr>
                 <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td><td>Paste from clipboard</td></tr>
-                <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Cancel current input</td></tr>
+                <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Cancel current input or running query</td></tr>
               </tbody>
             </table>
 

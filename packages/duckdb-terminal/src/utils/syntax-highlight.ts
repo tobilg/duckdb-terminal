@@ -94,13 +94,37 @@ export function highlightSQL(sql: string, tokens: DuckDBToken[]): string {
  * SQL validation, use Database.isValidSQL() which uses DuckDB's parser.
  */
 export function isSQLComplete(sql: string): boolean {
+  return scanSQL(sql).lastNonWhitespaceChar === ';';
+}
+
+/**
+ * Check whether the first meaningful SQL token is the EXPLAIN keyword.
+ * Leading whitespace, line comments, and block comments are ignored.
+ */
+export function isExplainStatement(sql: string): boolean {
+  return scanSQL(sql).firstKeyword === 'EXPLAIN';
+}
+
+interface SQLScanResult {
+  firstKeyword: string | null;
+  lastNonWhitespaceChar: string;
+}
+
+/**
+ * Scan SQL once for the small pieces of lexical state needed by the terminal.
+ */
+function scanSQL(sql: string): SQLScanResult {
   const trimmed = sql.trim();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return { firstKeyword: null, lastNonWhitespaceChar: '' };
+  }
 
   let inSingleQuote = false;
   let inDoubleQuote = false;
   let inLineComment = false;
   let inBlockComment = false;
+  let firstTokenSeen = false;
+  let firstKeyword: string | null = null;
   let lastNonWhitespaceChar = '';
 
   for (let i = 0; i < trimmed.length; i++) {
@@ -157,13 +181,26 @@ export function isSQLComplete(sql: string): boolean {
 
     // Check for string starts
     if (char === "'") {
+      firstTokenSeen = true;
       inSingleQuote = true;
       continue;
     }
 
     if (char === '"') {
+      firstTokenSeen = true;
       inDoubleQuote = true;
       continue;
+    }
+
+    if (!firstTokenSeen && !/\s/.test(char)) {
+      firstTokenSeen = true;
+      if (/[A-Za-z_]/.test(char)) {
+        let end = i + 1;
+        while (end < trimmed.length && /[A-Za-z0-9_$]/.test(trimmed[end])) {
+          end++;
+        }
+        firstKeyword = trimmed.slice(i, end).toUpperCase();
+      }
     }
 
     // Track non-whitespace characters
@@ -172,5 +209,5 @@ export function isSQLComplete(sql: string): boolean {
     }
   }
 
-  return lastNonWhitespaceChar === ';';
+  return { firstKeyword, lastNonWhitespaceChar };
 }

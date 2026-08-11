@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatTable,
+  formatTableLines,
   formatCSV,
   formatCSVHeader,
   formatCSVRow,
@@ -8,6 +9,7 @@ import {
   formatTSVHeader,
   formatTSVRow,
   formatJSON,
+  formatJSONLines,
 } from './table-formatter';
 
 describe('formatTable', () => {
@@ -37,6 +39,14 @@ describe('formatTable', () => {
     expect(result).toContain('Bob');
     expect(result).toContain('30');
     expect(result).toContain('25');
+  });
+
+  it('should keep line iteration compatible with string formatting', () => {
+    const columns = ['id', 'name'];
+    const rows = [[1, 'Alice'], [2, 'Bob']];
+    expect(Array.from(formatTableLines(columns, rows)).join('\n')).toBe(
+      formatTable(columns, rows)
+    );
   });
 
   it('should handle null values', () => {
@@ -182,6 +192,14 @@ describe('formatJSON', () => {
     expect(parsed).toHaveLength(2);
     expect(parsed[0].name).toBe('Alice');
     expect(parsed[1].name).toBe('Bob');
+  });
+
+  it('should keep JSON line iteration compatible with string formatting', () => {
+    const columns = ['id', 'name'];
+    const rows = [[1, 'Alice'], [2, 'Bob']];
+    expect(Array.from(formatJSONLines(columns, rows)).join('\n')).toBe(
+      formatJSON(columns, rows)
+    );
   });
 
   it('should handle numeric values (DuckDB converts BigInt to Double)', () => {

@@ -1,6 +1,6 @@
 {
   "name": "duckdb-terminal",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "DuckDB SQL Terminal powered by Ghostty terminal emulator",
   "type": "module",
   "main": "./dist/duckdb-terminal.umd.cjs",

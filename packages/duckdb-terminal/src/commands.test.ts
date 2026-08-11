@@ -29,8 +29,9 @@ function createMockContext(): CommandContext & { mockWriteln: ReturnType<typeof 
       isEnabled: vi.fn().mockReturnValue(true),
       setEnabled: vi.fn(),
     }),
-    getPageSize: vi.fn().mockReturnValue(0) as () => number,
+    getPageSize: vi.fn().mockReturnValue(1_000) as () => number,
     setPageSize: vi.fn() as (size: number) => void,
+    getMaxDisplayRows: vi.fn().mockReturnValue(1_000) as () => number,
     getPrompt: vi.fn().mockReturnValue('D > ') as () => string,
     getContinuationPrompt: vi.fn().mockReturnValue('  > ') as () => string,
     setPrompts: vi.fn() as (primary: string, continuation?: string) => void,
@@ -151,11 +152,19 @@ describe('Commands', () => {
       expect(ctx.setPageSize).toHaveBeenCalledWith(50);
     });
 
-    it('should disable pagination with 0', async () => {
+    it('should reset pagination with 0', async () => {
       const commands = createCommands(ctx);
       await commands.get('.pagesize')?.handler(['0']);
 
-      expect(ctx.setPageSize).toHaveBeenCalledWith(0);
+      expect(ctx.setPageSize).toHaveBeenCalledWith(1_000);
+    });
+
+    it('should reject partially numeric page sizes', async () => {
+      const commands = createCommands(ctx);
+      await commands.get('.pagesize')?.handler(['50rows']);
+
+      expect(ctx.setPageSize).not.toHaveBeenCalled();
+      expect(ctx.mockWriteln).toHaveBeenCalledWith('Usage: .pagesize <number> (0-1000)');
     });
   });
 

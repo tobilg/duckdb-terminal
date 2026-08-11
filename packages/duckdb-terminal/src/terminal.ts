@@ -4,13 +4,13 @@ import { InputBuffer } from './utils/input-buffer';
 import { HistoryStore } from './utils/history';
 import {
   formatTable,
+  formatTableLines,
   formatCSV,
-  formatCSVHeader,
-  formatCSVRow,
+  formatCSVLines,
   formatTSV,
-  formatTSVHeader,
-  formatTSVRow,
+  formatTSVLines,
   formatJSON,
+  formatJSONLines,
 } from './utils/table-formatter';
 import {
   pickFiles,
@@ -23,10 +23,14 @@ import {
   type FileInfo,
 } from './utils/file-handler';
 import { copyToClipboard, readFromClipboard } from './utils/clipboard';
-import { highlightSQL, isSQLComplete } from './utils/syntax-highlight';
+import { highlightSQL, isExplainStatement, isSQLComplete } from './utils/syntax-highlight';
 import { debounce } from './utils/debounce';
 import { parseCommand } from './utils/command-parser';
 import { LinkProvider } from './utils/link-provider';
+import { TerminalOutputWriter } from './utils/terminal-output-writer';
+import { QueryActivityIndicator } from './utils/query-activity-indicator';
+import { formatExplainResultLines, isExplainResult } from './utils/explain-formatter';
+import { PaginationHandler, parsePageSize } from './pagination';
 import { ChartManager } from './charts';
 import { SharingModal } from './sharing';
 import * as vt100 from './utils/vt100';
@@ -58,8 +62,19 @@ import {
 const DEFAULT_PROMPT = '🦆 ';
 /** Default continuation prompt displayed for multi-line SQL statements */
 const DEFAULT_CONTINUATION_PROMPT = '  > ';
-const STREAM_FLUSH_INTERVAL_MS = 16;
-const STREAM_MAX_CHUNK_CHARS = 32 * 1024;
+const DEFAULT_MAX_DISPLAY_ROWS = 1_000;
+
+interface QueryExecutionContext {
+  cancelRequested: boolean;
+  historyRecorded: boolean;
+}
+
+class QueryCancelledError extends Error {
+  constructor() {
+    super('Query cancelled');
+    this.name = 'QueryCancelledError';
+  }
+}
 
 /**
  * A browser-based SQL terminal for DuckDB, powered by Ghostty terminal emulator.
@@ -141,17 +156,18 @@ export class DuckDBTerminal implements TerminalInterface {
   private syntaxHighlighting: boolean = true;
   private lastQueryResult: QueryResult | null = null;
   private linkProvider: LinkProvider;
+  private outputWriter: TerminalOutputWriter;
+  private queryActivityIndicator: QueryActivityIndicator;
+  private pagination: PaginationHandler;
   private chartManager: ChartManager | null = null;
   private sharingModal: SharingModal | null = null;
 
   // Event emitter
   private eventListeners: Map<keyof TerminalEvents, Set<TerminalEventListener<any>>> = new Map();
 
-  // Pagination state (0 = disabled by default)
-  private pageSize: number = 0;
-  private paginationQuery: string | null = null;
-  private currentPage: number = 0;
-  private totalRows: number = 0;
+  private readonly maxDisplayRows: number;
+  private readonly exactRowCount: boolean;
+  private pageSize: number;
 
   // Prompt customization
   private prompt: string;
@@ -162,6 +178,8 @@ export class DuckDBTerminal implements TerminalInterface {
 
   // Query queue to prevent race conditions
   private queryQueue: Promise<QueryResult | null> = Promise.resolve(null);
+  private activeQueryExecution: QueryExecutionContext | null = null;
+  private activityExecution: QueryExecutionContext | null = null;
 
   // Cleanup function for drag-and-drop
   private dragDropCleanup: (() => void) | null = null;
@@ -173,14 +191,45 @@ export class DuckDBTerminal implements TerminalInterface {
 
   constructor(config: TerminalConfig) {
     this.config = config;
+    const maxDisplayRows = config.maxDisplayRows ?? DEFAULT_MAX_DISPLAY_ROWS;
+    if (
+      !Number.isSafeInteger(maxDisplayRows) ||
+      maxDisplayRows <= 0 ||
+      maxDisplayRows >= Number.MAX_SAFE_INTEGER
+    ) {
+      throw new RangeError('maxDisplayRows must be a positive integer below Number.MAX_SAFE_INTEGER');
+    }
+    this.maxDisplayRows = maxDisplayRows;
+    this.exactRowCount = config.exactRowCount ?? false;
+    this.pageSize = maxDisplayRows;
     this.terminalAdapter = new TerminalAdapter();
     this.database = new Database({
       storage: config.storage ?? 'memory',
       databasePath: config.databasePath,
+      maximumThreads: config.maximumThreads,
+      bundles: config.duckdbBundles,
     });
     this.inputBuffer = new InputBuffer();
     this.history = new HistoryStore();
     this.linkProvider = new LinkProvider();
+    this.outputWriter = new TerminalOutputWriter(this.terminalAdapter, {
+      process: (text) => this.linkProvider.process(text),
+    });
+    this.queryActivityIndicator = new QueryActivityIndicator((text) => this.write(text));
+    this.pagination = new PaginationHandler({
+      write: (text) => this.write(text),
+      writeln: (text) => this.writeln(text),
+      getDatabase: () => this.database,
+      displayResult: async (result, sql) => {
+        this.stopQueryActivity();
+        this.lastQueryResult = result;
+        await this.displayResult(result, sql);
+      },
+      getInputContent: () => this.inputBuffer.getContent(),
+      clearInput: () => this.inputBuffer.clear(),
+      insertChar: (char) => this.inputBuffer.insert(char),
+      backspace: () => this.inputBuffer.backspace(),
+    });
 
     // Configure link detection (default: enabled)
     if (config.linkDetection === false) {
@@ -539,6 +588,7 @@ export class DuckDBTerminal implements TerminalInterface {
 
     // Cancel any pending debounced operations
     this.debouncedHighlight.cancel();
+    this.stopQueryActivity();
   }
 
   /**
@@ -780,8 +830,8 @@ export class DuckDBTerminal implements TerminalInterface {
 
     this.commands.set('.pagesize', {
       name: '.pagesize',
-      description: 'Enable pagination for large results (default: off)',
-      usage: '.pagesize <number> (0 = disabled)',
+      description: `Set result page size (maximum: ${this.maxDisplayRows})`,
+      usage: '.pagesize <number> (0 = reset)',
       handler: (args) => this.cmdPageSize(args),
     });
 
@@ -924,12 +974,15 @@ export class DuckDBTerminal implements TerminalInterface {
    */
   private handleInput(data: string): void {
     if (this.state === 'executing') {
-      return; // Ignore input while executing
+      if (data.includes('\x03')) {
+        void this.cancelQuery();
+      }
+      return; // Ignore all other input while executing
     }
 
     // Handle pagination mode
     if (this.state === 'paginating') {
-      this.handlePaginationInput(data);
+      void this.handlePaginationInput(data);
       return;
     }
 
@@ -953,69 +1006,11 @@ export class DuckDBTerminal implements TerminalInterface {
    * @param data - The input character or escape sequence
    */
   private async handlePaginationInput(data: string): Promise<void> {
-    const totalPages = Math.ceil(this.totalRows / this.pageSize);
-
-    // Handle single character commands
-    const char = data.toLowerCase();
-
-    if (char === 'n' || data === '\x1b[B') {
-      // Next page
-      if (this.currentPage < totalPages - 1) {
-        this.currentPage++;
-        await this.executePaginatedQuery();
-      } else {
-        this.writeln(vt100.dim('Already on last page'));
-      }
-      return;
-    }
-
-    if (char === 'p' || data === '\x1b[A') {
-      // Previous page
-      if (this.currentPage > 0) {
-        this.currentPage--;
-        await this.executePaginatedQuery();
-      } else {
-        this.writeln(vt100.dim('Already on first page'));
-      }
-      return;
-    }
-
-    if (char === 'q' || char === '\x1b' || char === '\x03') {
-      // Quit pagination (q, Escape, or Ctrl+C)
-      this.writeln('');
-      this.exitPagination();
+    await this.pagination.handleInput(data);
+    if (!this.pagination.isActive()) {
+      this.setState('idle');
       this.writeln('');
       this.showPrompt();
-      return;
-    }
-
-    // Handle page number input (number + Enter)
-    if (char === '\r' || char === '\n') {
-      const content = this.inputBuffer.getContent().trim();
-      if (content) {
-        const pageNum = parseInt(content, 10);
-        if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-          this.currentPage = pageNum - 1;
-          this.inputBuffer.clear();
-          await this.executePaginatedQuery();
-        } else {
-          this.writeln(vt100.colorize(`Invalid page number. Enter 1-${totalPages}`, vt100.FG_RED));
-          this.inputBuffer.clear();
-        }
-      }
-      return;
-    }
-
-    // Accumulate digits for page number
-    if (/^\d$/.test(char)) {
-      this.write(this.inputBuffer.insert(char));
-      return;
-    }
-
-    // Backspace
-    if (char === '\x7f' || char === '\b') {
-      this.write(this.inputBuffer.backspace());
-      return;
     }
   }
 
@@ -1201,28 +1196,46 @@ export class DuckDBTerminal implements TerminalInterface {
     const isComplete = isSQLComplete(fullSQL);
 
     if (isComplete) {
-      // Add to history before validation (so user can recall and fix errors)
-      const flattenedSQL = fullSQL.replace(/\s*\n\s*/g, ' ').trim();
-      await this.history.add(flattenedSQL);
+      // Lock input synchronously, before history or validation can yield.
+      const execution = this.createQueryExecution();
+      this.writeln(''); // Add spacing before query output
+      this.inputBuffer.clear();
+      this.activateQueryExecution(execution);
 
-      // Validate SQL before executing if poached extension is loaded
-      if (this.database.isPoachedLoaded()) {
-        const validation = await this.database.validateSQL(fullSQL);
-        if (validation && !validation.isValid && validation.error?.exceptionMessage) {
-          // There's a syntax error - show it to the user instead of executing
-          this.writeln('');
-          this.writeln(vt100.colorize('Error: ', vt100.FG_RED) + validation.error.exceptionMessage);
-          this.collectedSQL = [];
-          this.setState('idle');
-          this.inputBuffer.clear();
-          this.writeln('');
-          this.showPrompt();
-          return;
+      try {
+        // Add to history before validation (so user can recall and fix errors).
+        const flattenedSQL = fullSQL.replace(/\s*\n\s*/g, ' ').trim();
+        await this.history.add(flattenedSQL);
+        execution.historyRecorded = true;
+
+        // Validate SQL before executing if poached extension is loaded.
+        if (!execution.cancelRequested && this.database.isPoachedLoaded()) {
+          const validation = await this.database.validateSQL(fullSQL);
+          if (
+            !execution.cancelRequested &&
+            validation &&
+            !validation.isValid &&
+            validation.error?.exceptionMessage
+          ) {
+            this.finishQueryExecution(execution);
+            this.writeln(
+              vt100.colorize('Error: ', vt100.FG_RED) + validation.error.exceptionMessage
+            );
+            this.collectedSQL = [];
+            this.setState('idle');
+            this.writeln('');
+            this.showPrompt();
+            return;
+          }
         }
+
+        await this.enqueueSQL(fullSQL, execution);
+      } catch (error) {
+        this.finishQueryExecution(execution);
+        const message = error instanceof Error ? error.message : String(error);
+        this.writeln(vt100.colorize('Error: ', vt100.FG_RED) + message);
       }
 
-      this.writeln(''); // Add spacing before query output
-      await this.executeSQL(fullSQL);
       this.collectedSQL = [];
       // Don't reset state if we're now paginating
       if (this.state !== 'paginating') {
@@ -1409,7 +1422,9 @@ export class DuckDBTerminal implements TerminalInterface {
 
     const success = await copyToClipboard(text);
     if (success) {
-      this.writeln(vt100.colorize('Result copied to clipboard', vt100.FG_GREEN));
+      const isPaged = this.isPartialResult(this.lastQueryResult);
+      const label = isPaged ? 'Current page copied to clipboard' : 'Result copied to clipboard';
+      this.writeln(vt100.colorize(label, vt100.FG_GREEN));
     } else {
       this.writeln(vt100.colorize('Failed to copy to clipboard', vt100.FG_RED));
     }
@@ -1453,7 +1468,9 @@ export class DuckDBTerminal implements TerminalInterface {
 
     const filename = this.generateDownloadFilename(args[0], extension);
     downloadFile(content, filename, mimeType);
-    this.writeln(vt100.colorize(`Downloaded: ${filename}`, vt100.FG_GREEN));
+    const isPaged = this.isPartialResult(this.lastQueryResult);
+    const prefix = isPaged ? 'Downloaded current page' : 'Downloaded';
+    this.writeln(vt100.colorize(`${prefix}: ${filename}`, vt100.FG_GREEN));
   }
 
   /**
@@ -1476,6 +1493,13 @@ export class DuckDBTerminal implements TerminalInterface {
     const seconds = String(now.getSeconds()).padStart(2, '0');
 
     return `duckdb-result-${year}-${month}-${day}-${hours}${minutes}${seconds}${extension}`;
+  }
+
+  private isPartialResult(result: QueryResult): boolean {
+    const pagination = result.pagination;
+    return Boolean(
+      pagination && (pagination.hasPreviousPage || pagination.hasNextPage)
+    );
   }
 
   /**
@@ -1516,8 +1540,8 @@ export class DuckDBTerminal implements TerminalInterface {
    * displays the results in the configured output format (table, CSV, or JSON),
    * and adds the query to the command history.
    *
-   * For large result sets (when pagination is enabled via `.pagesize`), the method
-   * will automatically paginate the results and enter pagination mode.
+   * Large result sets are automatically bounded and paginated with one-row
+   * lookahead. Exact totals are computed eagerly only when `exactRowCount` is set.
    *
    * @param sql - The SQL statement to execute (should end with a semicolon)
    * @returns A promise that resolves to the query result, or null if an error occurred
@@ -1543,10 +1567,84 @@ export class DuckDBTerminal implements TerminalInterface {
    * ```
    */
   async executeSQL(sql: string): Promise<QueryResult | null> {
+    return this.enqueueSQL(sql, this.createQueryExecution());
+  }
+
+  /**
+   * Requests cancellation of the query currently executing in the terminal.
+   *
+   * The terminal remains locked until the underlying query promise settles, so
+   * callers cannot accidentally start another query on the same connection.
+   *
+   * @returns Whether a new cancellation request was accepted
+   */
+  async cancelQuery(): Promise<boolean> {
+    const execution = this.activeQueryExecution;
+    if (this.state !== 'executing' || !execution || execution.cancelRequested) {
+      return false;
+    }
+
+    execution.cancelRequested = true;
+    this.stopQueryActivity(execution);
+    this.writeln(vt100.dim('Cancelling…'));
+
+    try {
+      await this.database.cancelActiveQuery();
+    } catch {
+      // The execution path still observes cancelRequested at its next await boundary.
+    }
+
+    return true;
+  }
+
+  private createQueryExecution(): QueryExecutionContext {
+    return {
+      cancelRequested: false,
+      historyRecorded: false,
+    };
+  }
+
+  private enqueueSQL(
+    sql: string,
+    execution: QueryExecutionContext
+  ): Promise<QueryResult | null> {
     // Chain through query queue to prevent race conditions
-    const execution = this.queryQueue.then(() => this.executeSQLInternal(sql));
-    this.queryQueue = execution.catch(() => null); // Ensure queue continues even on error
-    return execution;
+    const queuedQuery = this.queryQueue.then(() => this.executeSQLInternal(sql, execution));
+    this.queryQueue = queuedQuery.catch(() => null); // Ensure queue continues even on error
+    return queuedQuery;
+  }
+
+  private activateQueryExecution(execution: QueryExecutionContext): void {
+    this.activeQueryExecution = execution;
+    this.setState('executing');
+    if (this.activityExecution !== execution) {
+      this.stopQueryActivity();
+      this.activityExecution = execution;
+      this.queryActivityIndicator.start();
+    }
+  }
+
+  private finishQueryExecution(execution: QueryExecutionContext): void {
+    this.stopQueryActivity(execution);
+    if (this.activeQueryExecution === execution) {
+      this.activeQueryExecution = null;
+    }
+  }
+
+  private stopQueryActivity(execution?: QueryExecutionContext): void {
+    if (execution && this.activityExecution !== execution) {
+      return;
+    }
+    if (this.activityExecution) {
+      this.queryActivityIndicator.stop();
+      this.activityExecution = null;
+    }
+  }
+
+  private throwIfQueryCancelled(execution: QueryExecutionContext): void {
+    if (execution.cancelRequested) {
+      throw new QueryCancelledError();
+    }
   }
 
   /**
@@ -1583,70 +1681,64 @@ export class DuckDBTerminal implements TerminalInterface {
    * @param sql - The SQL statement to execute
    * @returns The query result, or null on error
    */
-  private async executeSQLInternal(sql: string): Promise<QueryResult | null> {
-    this.setState('executing');
+  private async executeSQLInternal(
+    sql: string,
+    execution: QueryExecutionContext
+  ): Promise<QueryResult | null> {
+    this.activateQueryExecution(execution);
     const startTime = performance.now();
 
     // Emit queryStart event
     this.emit('queryStart', { sql });
 
     try {
+      this.throwIfQueryCancelled(execution);
+
       // Add to history (flatten multi-line SQL to single line for easier recall)
-      const flattenedSQL = sql.replace(/\s*\n\s*/g, ' ').trim();
-      await this.history.add(flattenedSQL);
-
-      // Check if pagination is enabled and this is a SELECT query
-      const trimmedSQL = sql.trim().replace(/;+$/, '');
-      const isSelectQuery = /^\s*SELECT\s/i.test(trimmedSQL);
-      // Skip pagination if query already has LIMIT or OFFSET (user is controlling result size)
-      const hasLimitOffset = /\b(LIMIT|OFFSET)\b/i.test(trimmedSQL);
-
-      const shouldUsePagination = this.pageSize > 0 && isSelectQuery && !hasLimitOffset;
-
-      if (shouldUsePagination) {
-        // Get total row count first
-        const countSQL = `SELECT COUNT(*) as cnt FROM (${trimmedSQL}) AS _count_subquery`;
-        const countResult = await this.database.executeQuery(countSQL);
-        const countValue = countResult.rows[0]?.[0];
-        // DuckDB returns BigInt for COUNT(*), convert to number for comparison
-        const totalCount = typeof countValue === 'bigint' ? Number(countValue) : (countValue as number ?? 0);
-
-        if (totalCount > this.pageSize) {
-          // Enable pagination
-          this.paginationQuery = trimmedSQL;
-          this.totalRows = totalCount;
-          this.currentPage = 0;
-          return await this.executePaginatedQuery();
-        }
+      if (!execution.historyRecorded) {
+        const flattenedSQL = sql.replace(/\s*\n\s*/g, ' ').trim();
+        await this.history.add(flattenedSQL);
+        execution.historyRecorded = true;
       }
+      this.throwIfQueryCancelled(execution);
 
-      if (this.shouldStreamDelimitedOutput(shouldUsePagination)) {
-        const result = await this.executeDelimitedStream(sql, startTime);
-        const duration = performance.now() - startTime;
+      const preparedSQL = PaginationHandler.prepareQuery(sql.trim());
+      const totalCount = this.exactRowCount
+        ? await this.database.getQueryRowCount(preparedSQL)
+        : null;
+      this.throwIfQueryCancelled(execution);
 
+      let canPaginate = totalCount !== null;
+      if (!canPaginate) {
+        canPaginate = await this.database.canPaginateQuery(preparedSQL);
+        this.throwIfQueryCancelled(execution);
+      }
+      let result: QueryResult | null;
+
+      if (canPaginate) {
+        this.pagination.start(preparedSQL, totalCount, this.pageSize);
+        result = await this.pagination.executeCurrentPage();
+        this.throwIfQueryCancelled(execution);
+        if (result?.pagination?.hasNextPage) {
+          this.setState('paginating');
+        } else {
+          this.pagination.exit();
+        }
+      } else {
+        result = await this.database.executeQueryLimited(sql, this.maxDisplayRows);
+        this.throwIfQueryCancelled(execution);
         this.lastQueryResult = result;
-
-        if (this.showTimer) {
-          this.writeln(
-            vt100.dim(`Time: ${result.duration.toFixed(2)}ms`)
-          );
+        this.stopQueryActivity(execution);
+        if (result.columns.length > 0) {
+          await this.displayResult(result, sql);
         }
-
-        this.emit('queryEnd', { sql, result, duration });
-
-        return result;
       }
 
-      // Execute without pagination
-      const result = await this.database.executeQuery(sql);
+      this.stopQueryActivity(execution);
       const duration = performance.now() - startTime;
+      if (!result) return null;
 
-      // Store last result for copy command
       this.lastQueryResult = result;
-
-      if (result.columns.length > 0) {
-        this.displayResult(result);
-      }
 
       if (this.showTimer) {
         this.writeln(
@@ -1659,8 +1751,19 @@ export class DuckDBTerminal implements TerminalInterface {
 
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      this.stopQueryActivity(execution);
+      const cancelled = execution.cancelRequested || error instanceof QueryCancelledError;
+      const message = cancelled
+        ? 'Query cancelled'
+        : error instanceof Error ? error.message : String(error);
       const duration = performance.now() - startTime;
+      this.pagination.exit();
+
+      if (cancelled) {
+        this.writeln(vt100.colorize(message, vt100.FG_YELLOW));
+        this.emit('queryEnd', { sql, result: null, error: message, duration });
+        return null;
+      }
 
       // Extract just the error type and message, without the LINE/caret details
       // DuckDB errors look like: "Binder Error: message\n\nLINE 1: ...\n        ^"
@@ -1673,153 +1776,11 @@ export class DuckDBTerminal implements TerminalInterface {
 
       return null;
     } finally {
-      if ((this.state as TerminalState) !== 'paginating') {
+      this.finishQueryExecution(execution);
+      if (!this.pagination.isActive()) {
         this.setState('idle');
       }
     }
-  }
-
-  /**
-   * Executes the current paginated query for the current page.
-   *
-   * Adds LIMIT/OFFSET to the stored query and displays results with
-   * pagination controls.
-   *
-   * @returns The query result for the current page, or null on error
-   */
-  private async executePaginatedQuery(): Promise<QueryResult | null> {
-    if (!this.paginationQuery) return null;
-
-    const offset = this.currentPage * this.pageSize;
-    const paginatedSQL = `${this.paginationQuery} LIMIT ${this.pageSize} OFFSET ${offset}`;
-
-    try {
-      const result = await this.database.executeQuery(paginatedSQL);
-      this.lastQueryResult = result;
-
-      if (result.columns.length > 0) {
-        this.displayResult(result);
-      }
-
-      const totalPages = Math.ceil(this.totalRows / this.pageSize);
-      const startRow = offset + 1;
-      const endRow = Math.min(offset + this.pageSize, this.totalRows);
-
-      this.writeln('');
-      this.writeln(
-        vt100.dim(`Showing rows ${startRow}-${endRow} of ${this.totalRows} (page ${this.currentPage + 1}/${totalPages})`)
-      );
-      this.writeln(
-        vt100.colorize('  [n]ext  [p]rev  [q]uit  or enter page number', vt100.FG_CYAN)
-      );
-
-      this.setState('paginating');
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.writeln(vt100.colorize(`Error: ${message}`, vt100.FG_RED));
-      if (paginatedSQL.length > 80) {
-        const truncatedSQL = paginatedSQL.length > 200 ? paginatedSQL.substring(0, 200) + '...' : paginatedSQL;
-        this.writeln(vt100.dim(`  Query: ${truncatedSQL.replace(/\n/g, ' ')}`));
-      }
-      this.exitPagination();
-      return null;
-    }
-  }
-
-  /**
-   * Exits pagination mode and resets pagination state.
-   */
-  private exitPagination(): void {
-    this.paginationQuery = null;
-    this.currentPage = 0;
-    this.totalRows = 0;
-    this.setState('idle');
-  }
-
-  private shouldStreamDelimitedOutput(paginationWasConsidered: boolean): boolean {
-    return !paginationWasConsidered && (this.outputMode === 'csv' || this.outputMode === 'tsv');
-  }
-
-  private async executeDelimitedStream(sql: string, startTime: number): Promise<QueryResult> {
-    const stream = await this.database.streamQuery(sql);
-    const rows: unknown[][] = [];
-
-    if (stream.columns.length > 0) {
-      this.writeStreamText(this.formatDelimitedHeader(stream.columns) + '\n');
-      await this.yieldAfterStreamFlush();
-    }
-
-    let buffer = '';
-    let lastFlush = performance.now();
-    const flush = async (force = false): Promise<void> => {
-      if (!buffer) {
-        return;
-      }
-      if (!force) {
-        const elapsed = performance.now() - lastFlush;
-        if (elapsed < STREAM_FLUSH_INTERVAL_MS && buffer.length < STREAM_MAX_CHUNK_CHARS) {
-          return;
-        }
-      }
-
-      this.writeStreamText(buffer);
-      buffer = '';
-      lastFlush = performance.now();
-      await this.yieldAfterStreamFlush();
-    };
-
-    for await (const rowBatch of stream.rowBatches) {
-      rows.push(...rowBatch);
-      for (const row of rowBatch) {
-        buffer += this.formatDelimitedRow(row) + '\n';
-        await flush();
-      }
-      await flush(true);
-    }
-
-    await flush(true);
-
-    const duration = performance.now() - startTime;
-    const result: QueryResult = {
-      columns: stream.columns,
-      columnTypes: stream.columnTypes,
-      rows,
-      rowCount: rows.length,
-      duration,
-    };
-
-    if (result.columns.length > 0) {
-      this.writeln(
-        vt100.dim(
-          `${result.rowCount} row${result.rowCount !== 1 ? 's' : ''}`
-        )
-      );
-    }
-
-    return result;
-  }
-
-  private formatDelimitedHeader(columns: string[]): string {
-    return this.outputMode === 'tsv' ? formatTSVHeader(columns) : formatCSVHeader(columns);
-  }
-
-  private formatDelimitedRow(row: unknown[]): string {
-    return this.outputMode === 'tsv' ? formatTSVRow(row) : formatCSVRow(row);
-  }
-
-  private writeStreamText(text: string): void {
-    const processed = this.linkProvider.process(text);
-    this.write(processed.replace(/\r?\n/g, '\r\n'));
-  }
-
-  private async yieldAfterStreamFlush(): Promise<void> {
-    if (typeof globalThis.requestAnimationFrame === 'function') {
-      await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
-      return;
-    }
-
-    await Promise.resolve();
   }
 
   /**
@@ -1829,36 +1790,57 @@ export class DuckDBTerminal implements TerminalInterface {
    * the current outputMode setting.
    *
    * @param result - The query result to display
+   * @param sql - The SQL statement that produced the result
    */
-  private displayResult(result: QueryResult): void {
-    switch (this.outputMode) {
-      case 'csv':
-        this.writeln(formatCSV(result.columns, result.rows));
-        break;
-      case 'tsv':
-        this.writeln(formatTSV(result.columns, result.rows));
-        break;
-      case 'json':
-        this.writeln(formatJSON(result.columns, result.rows));
-        break;
-      case 'table':
-      default:
-        this.terminalAdapter.fit();
-        this.writeln(formatTable(result.columns, result.rows, {
-          columnTypes: result.columnTypes,
-          maxWidth: this.terminalAdapter.cols,
-          maxColumnWidth: 80,
-          showTypes: Boolean(result.columnTypes?.length),
-          alignByType: true,
-        }));
-        break;
+  private async displayResult(result: QueryResult, sql: string): Promise<void> {
+    let lines: Iterable<string>;
+    const renderExplainPlan = this.outputMode === 'table' &&
+      isExplainStatement(sql) &&
+      isExplainResult(result);
+
+    if (renderExplainPlan) {
+      lines = formatExplainResultLines(result);
+    } else {
+      switch (this.outputMode) {
+        case 'csv':
+          lines = formatCSVLines(result.columns, result.rows);
+          break;
+        case 'tsv':
+          lines = formatTSVLines(result.columns, result.rows);
+          break;
+        case 'json':
+          lines = formatJSONLines(result.columns, result.rows);
+          break;
+        case 'table':
+        default:
+          this.terminalAdapter.fit();
+          lines = formatTableLines(result.columns, result.rows, {
+            columnTypes: result.columnTypes,
+            maxWidth: this.terminalAdapter.cols,
+            maxColumnWidth: 80,
+            showTypes: Boolean(result.columnTypes?.length),
+            alignByType: true,
+          });
+          break;
+      }
     }
 
-    this.writeln(
-      vt100.dim(
-        `${result.rowCount} row${result.rowCount !== 1 ? 's' : ''}`
-      )
-    );
+    await this.outputWriter.writeLines(lines);
+
+    if (!renderExplainPlan) {
+      this.writeln(
+        vt100.dim(
+          `${result.rowCount} row${result.rowCount !== 1 ? 's' : ''}`
+        )
+      );
+    }
+    if (result.truncated) {
+      this.writeln(
+        vt100.dim(
+          `Showing first ${result.rowCount} rows; pagination is unavailable for this statement`
+        )
+      );
+    }
   }
 
   // Command handlers
@@ -2086,23 +2068,19 @@ export class DuckDBTerminal implements TerminalInterface {
 
   private cmdPageSize(args: string[]): void {
     if (args.length === 0) {
-      if (this.pageSize === 0) {
-        this.writeln('Pagination is disabled (showing all rows)');
-      } else {
-        this.writeln(`Page size: ${this.pageSize} rows`);
-      }
+      this.writeln(`Page size: ${this.pageSize} rows (maximum: ${this.maxDisplayRows})`);
       return;
     }
-    const size = parseInt(args[0], 10);
-    if (isNaN(size) || size < 0) {
-      this.writeln('Usage: .pagesize <number> (0 = no pagination)');
+    const parsed = parsePageSize(args[0], this.maxDisplayRows);
+    if (!parsed) {
+      this.writeln(`Usage: .pagesize <number> (0-${this.maxDisplayRows})`);
       return;
     }
-    this.pageSize = size;
-    if (size === 0) {
-      this.writeln('Pagination disabled (will show all rows)');
+    this.pageSize = parsed.pageSize;
+    if (parsed.reset) {
+      this.writeln(`Page size reset to ${this.pageSize} rows`);
     } else {
-      this.writeln(`Page size set to ${size} rows`);
+      this.writeln(`Page size set to ${parsed.pageSize} rows`);
     }
   }
 
@@ -2128,6 +2106,10 @@ export class DuckDBTerminal implements TerminalInterface {
       }
       this.loadedFiles.clear();
 
+      // Restore both global and session DuckDB configuration before claiming
+      // that settings are back at their defaults.
+      await this.database.resetSettings({ recreateOnFailure: true });
+
       // Clear last query result
       this.lastQueryResult = null;
 
@@ -2138,15 +2120,12 @@ export class DuckDBTerminal implements TerminalInterface {
       this.showTimer = false;
       this.outputMode = 'table';
       this.syntaxHighlighting = true;
-      this.pageSize = 0;
+      this.pageSize = this.maxDisplayRows;
       this.linkProvider.setEnabled(true);
       this.prompt = DEFAULT_PROMPT;
       this.continuationPrompt = DEFAULT_CONTINUATION_PROMPT;
 
-      // Reset pagination state
-      this.paginationQuery = null;
-      this.currentPage = 0;
-      this.totalRows = 0;
+      this.pagination.exit();
 
       this.writeln(
         vt100.colorize(
@@ -2536,7 +2515,9 @@ export class DuckDBTerminal implements TerminalInterface {
 
       // Execute the generated SQL
       this.writeln('');
-      await this.executeSQLInternal(sql.trim());
+      const execution = this.createQueryExecution();
+      execution.historyRecorded = true;
+      await this.enqueueSQL(sql.trim(), execution);
     } catch (error) {
       if (error instanceof AIClientError) {
         this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
