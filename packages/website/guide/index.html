@@ -1310,6 +1310,11 @@
         <a href="#duckdb-features" class="guide-nav-link">DuckDB Features</a>
         <a href="#data-analysis" class="guide-nav-link">Data Analysis</a>
         <a href="#external-data" class="guide-nav-link">External Data</a>
+
+        <div class="guide-nav-title">Advanced</div>
+        <a href="#extensions" class="guide-nav-link">Extensions</a>
+        <a href="#cloud-storage" class="guide-nav-link">Cloud Storage</a>
+        <a href="#memory-limit" class="guide-nav-link">Memory Limit</a>
       </nav>
 
       <div class="guide-content-wrapper">
@@ -2011,6 +2016,88 @@
 
             <div class="info-box warning">
               <p><strong>Note:</strong> Remote file access requires CORS headers from the server. Some public datasets may not be accessible due to CORS restrictions.</p>
+            </div>
+          </section>
+
+          <!-- Extensions -->
+          <section id="extensions" class="guide-section">
+            <h2>Extensions</h2>
+            <p>DuckDB-Wasm can load compatible extensions at runtime. In the browser, <code>INSTALL</code> does not persist an extension across sessions; <code>LOAD</code> fetches and loads the matching Wasm extension for the current DuckDB build.</p>
+
+            <pre><code><span class="keyword">INSTALL</span> iceberg;
+<span class="keyword">LOAD</span> iceberg;</code></pre>
+
+            <p>Inspect the extension catalog and the state of each extension with:</p>
+
+            <pre><code><span class="keyword">SELECT</span> extension_name, installed, loaded
+<span class="keyword">FROM</span> <span class="function">duckdb_extensions</span>()
+<span class="keyword">ORDER BY</span> extension_name;</code></pre>
+
+            <div class="info-box warning">
+              <p><strong>Compatibility:</strong> Catalog entries can vary by DuckDB version, and not every native DuckDB extension has a compatible Wasm build. A load can also fail when an extension does not match the current Wasm ABI.</p>
+            </div>
+
+            <h3>Apache Iceberg</h3>
+            <p>After loading the Iceberg extension, you can query a table directly and inspect its snapshots:</p>
+
+            <pre><code><span class="keyword">SELECT</span> *
+<span class="keyword">FROM</span> <span class="function">iceberg_scan</span>(<span class="string">'s3://my-bucket/warehouse/db/table'</span>);
+
+<span class="keyword">SELECT</span> *
+<span class="keyword">FROM</span> <span class="function">iceberg_snapshots</span>(<span class="string">'s3://my-bucket/warehouse/db/table'</span>);</code></pre>
+          </section>
+
+          <!-- Cloud Storage -->
+          <section id="cloud-storage" class="guide-section">
+            <h2>Cloud Storage (S3 / R2)</h2>
+            <p>DuckDB-Wasm can query objects in Amazon S3 and S3-compatible storage such as Cloudflare R2 directly from the browser. Private objects require a temporary DuckDB secret.</p>
+
+            <h3>Amazon S3</h3>
+            <pre><code><span class="keyword">CREATE SECRET</span> (
+    <span class="keyword">TYPE</span> s3,
+    <span class="keyword">PROVIDER</span> config,
+    KEY_ID <span class="string">'AKIA...'</span>,
+    SECRET <span class="string">'...'</span>,
+    REGION <span class="string">'eu-central-1'</span>
+);
+
+<span class="keyword">SELECT</span> *
+<span class="keyword">FROM</span> <span class="function">read_parquet</span>(<span class="string">'s3://my-bucket/data/*.parquet'</span>);</code></pre>
+
+            <h3>Cloudflare R2</h3>
+            <pre><code><span class="keyword">CREATE SECRET</span> (
+    <span class="keyword">TYPE</span> r2,
+    <span class="keyword">PROVIDER</span> config,
+    KEY_ID <span class="string">'...'</span>,
+    SECRET <span class="string">'...'</span>,
+    ACCOUNT_ID <span class="string">'...'</span>
+);
+
+<span class="keyword">SELECT</span> *
+<span class="keyword">FROM</span> <span class="function">read_parquet</span>(<span class="string">'r2://my-bucket/data.parquet'</span>);</code></pre>
+
+            <div class="info-box warning">
+              <p><strong>Browser access:</strong> Configure the bucket's CORS policy to allow requests from this site's origin, including the headers and HTTP Range requests required by the object store. Use short-lived, least-privilege credentials.</p>
+            </div>
+
+            <p><code>CREATE SECRET</code> creates a temporary, in-memory secret by default. In the hosted terminal it lasts only for the current DuckDB instance and is discarded when the page is reloaded.</p>
+          </section>
+
+          <!-- Memory Limit -->
+          <section id="memory-limit" class="guide-section">
+            <h2>Memory Limit</h2>
+            <p>DuckDB-Wasm has a finite WebAssembly memory budget. The exact default depends on the browser and build, so query the current value before changing it:</p>
+
+            <pre><code><span class="comment">-- Check the current limit</span>
+<span class="keyword">SELECT</span> <span class="function">current_setting</span>(<span class="string">'memory_limit'</span>);
+
+<span class="comment">-- Lower it for this DuckDB instance</span>
+<span class="keyword">SET</span> memory_limit = <span class="string">'1GB'</span>;</code></pre>
+
+            <p>Lowering the limit provides a guardrail for memory-intensive queries. Queries that exceed it fail with an <code>Out of Memory Error</code> instead of continuing to grow DuckDB's managed memory.</p>
+
+            <div class="info-box">
+              <p><strong>Storage:</strong> The hosted terminal opens an in-memory database. Applications embedding the library can instead opt into persistent OPFS storage with the <code>storage</code> and <code>databasePath</code> options.</p>
             </div>
           </section>
 
