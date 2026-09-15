@@ -3,7 +3,8 @@
   "compilerOptions": {
     "noEmit": true,
     "paths": {
-      "duckdb-terminal": ["../duckdb-terminal/src/index.ts"]
+      "duckdb-terminal": ["../duckdb-terminal/src/index.ts"],
+      "duckdb-terminal/style.css": ["../duckdb-terminal/node_modules/@gespenst/core/dist/index.css"]
     }
   },
   "include": ["src", "vite.config.ts", "../duckdb-terminal/src/vite-env.d.ts"]

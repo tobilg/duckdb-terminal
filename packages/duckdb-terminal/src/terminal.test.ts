@@ -1,31 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock ghostty-web module
-vi.mock('ghostty-web', () => ({
-  init: vi.fn().mockResolvedValue(undefined),
-  Ghostty: {
-    load: vi.fn().mockResolvedValue({}),
-  },
-  Terminal: vi.fn().mockImplementation(function() {
-    return {
-      loadAddon: vi.fn(),
-      open: vi.fn(),
-      write: vi.fn().mockImplementation((_text: string, callback?: () => void) => callback?.()),
-      writeln: vi.fn().mockImplementation((_text: string, callback?: () => void) => callback?.()),
-      focus: vi.fn(),
-      dispose: vi.fn(),
-      onData: vi.fn(),
-      onResize: vi.fn(),
-      cols: 80,
-      rows: 24,
-      options: {},
-    };
-  }),
-  FitAddon: vi.fn().mockImplementation(function() {
-    return {
-      fit: vi.fn(),
-      proposeDimensions: vi.fn(),
-    };
+vi.mock('@gespenst/core', async () => {
+  const { createGespenstMock } = await import('../test/gespenst-mock');
+  return { createTerminal: vi.fn(async () => createGespenstMock()) };
+});
+vi.mock('@gespenst/web-links', () => ({
+  WebLinksAddon: vi.fn().mockImplementation(function() {
+    return { activate: vi.fn(), dispose: vi.fn() };
   }),
 }));
 
@@ -78,6 +59,7 @@ vi.mock('./utils/history', () => ({
       next: vi.fn().mockReturnValue(null),
       getAll: vi.fn().mockResolvedValue([]),
       reset: vi.fn(),
+      close: vi.fn(),
     };
   }),
 }));
@@ -285,7 +267,7 @@ describe('DuckDBTerminal Events', () => {
       terminal.on('themeChange', listener);
 
       await terminal.start();
-      terminal.setTheme('light');
+      await terminal.setTheme('light');
 
       expect(listener).toHaveBeenCalledTimes(1);
       const payload = listener.mock.calls[0][0];
@@ -377,8 +359,8 @@ describe('DuckDBTerminal query cancellation', () => {
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    terminal.destroy();
+  afterEach(async () => {
+    await terminal.destroy();
     document.body.removeChild(container);
   });
 
@@ -837,7 +819,7 @@ describe('DuckDBTerminal Commands', () => {
       const internals = getTerminalInternals(terminal);
       const writeSpy = vi.spyOn(internals.terminalAdapter, 'writeAsync');
       internals.outputMode = 'table';
-      internals.terminalAdapter.terminal.cols = 42;
+      internals.terminalAdapter.terminal.geometry.cols = 42;
       internals.database.executeQuery.mockResolvedValueOnce({
         columns: ['id', 'description'],
         columnTypes: ['INTEGER', 'VARCHAR'],
@@ -1151,5 +1133,98 @@ describe('DuckDBTerminal Commands', () => {
       internals.handleInput('\x1b[1;3C');
       expect(internals.inputBuffer.getCursorPos()).toBe('SELECT'.length);
     });
+  });
+});
+
+describe('Gespenst application lifecycle', () => {
+  let terminal: DuckDBTerminal;
+  beforeEach(async () => {
+    terminal = new DuckDBTerminal({ container: document.createElement('div'), welcomeMessage: false });
+    await terminal.start();
+  });
+  afterEach(async () => { await terminal.destroy(); });
+
+  it('preserves typed input when running a public dot command', async () => {
+    const internals = terminal as unknown as {
+      handleInput(data: string): void;
+      inputBuffer: { getContent(): string; getCursorPos(): number };
+    };
+    internals.handleInput('SELECT 42;');
+    internals.handleInput('\x1b[D');
+    const cursor = internals.inputBuffer.getCursorPos();
+    await terminal.runCommand('.help');
+    expect(internals.inputBuffer.getContent()).toBe('SELECT 42;');
+    expect(internals.inputBuffer.getCursorPos()).toBe(cursor);
+    expect(getTerminalInternals(terminal).database.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('invokes a file picker before yielding from runCommand', async () => {
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function(this: HTMLInputElement) {
+      this.dispatchEvent(new Event('cancel'));
+    });
+    try {
+      const command = terminal.runCommand('.open');
+      expect(click).toHaveBeenCalledOnce();
+      await command;
+    } finally { click.mockRestore(); }
+  });
+
+  it('inserts paste without executing newlines or control bytes', () => {
+    const internals = terminal as unknown as {
+      insertPastedText(text: string): void;
+      inputBuffer: { getContent(): string };
+    };
+    internals.insertPastedText('SELECT\n 42;\r\n\x03\x16');
+    expect(internals.inputBuffer.getContent()).toBe('SELECT 42;');
+    expect(getTerminalInternals(terminal).database.executeQuery).not.toHaveBeenCalled();
+    expect(getTerminalInternals(terminal).database.cancelActiveQuery).not.toHaveBeenCalled();
+  });
+
+  it('applies themes in order and emits changes only after rendering', async () => {
+    const internals = getTerminalInternals(terminal);
+    const adapter = internals.terminalAdapter as unknown as { setTheme(theme: unknown): Promise<void> };
+    const first = deferred<void>();
+    const themes: string[] = [];
+    const apply = vi.spyOn(adapter, 'setTheme').mockImplementationOnce(() => first.promise).mockResolvedValue(undefined);
+    terminal.on('themeChange', ({ theme }) => themes.push(theme.name));
+    const light = terminal.setTheme('light');
+    const dark = terminal.setTheme('dark');
+    await Promise.resolve();
+    expect(themes).toEqual([]);
+    expect(apply).toHaveBeenCalledTimes(1);
+    first.resolve();
+    await Promise.all([light, dark]);
+    expect(themes).toEqual(['light', 'dark']);
+  });
+
+  it('cancels active work and closes resources once during teardown', async () => {
+    const internals = getTerminalInternals(terminal);
+    const query = deferred<QueryResult>();
+    const began = deferred<void>();
+    internals.database.executeQuery.mockImplementationOnce(() => { began.resolve(); return query.promise; });
+    const running = terminal.executeSQL('SELECT 1');
+    await began.promise;
+    const db = internals.database as unknown as { close: ReturnType<typeof vi.fn> };
+    const destroy = terminal.destroy();
+    expect(terminal.destroy()).toBe(destroy);
+    expect(internals.database.cancelActiveQuery).toHaveBeenCalledOnce();
+    expect(db.close).not.toHaveBeenCalled();
+    await expect(terminal.executeSQL('SELECT 2')).rejects.toThrow('disposed');
+    query.resolve({ columns: ['one'], rows: [[1]], rowCount: 1, duration: 1 });
+    await running;
+    await destroy;
+    expect(db.close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects dot commands while an SQL call is queued but has not started', async () => {
+    const running = terminal.executeSQL('SELECT 1');
+    await expect(terminal.runCommand('.reset')).rejects.toThrow('busy');
+    await running;
+    expect(getTerminalInternals(terminal).database.resetSettings).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid scrollback configurations immediately', () => {
+    expect(() => new DuckDBTerminal({ container: document.createElement('div'), scrollback: 1024 } as never)).toThrow('Use scrollbackLines');
+    expect(() => new DuckDBTerminal({ container: document.createElement('div'), scrollbackLines: -1 })).toThrow('scrollbackLines');
   });
 });

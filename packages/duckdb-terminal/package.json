@@ -1,20 +1,23 @@
 {
   "name": "duckdb-terminal",
-  "version": "0.6.0",
-  "description": "DuckDB SQL Terminal powered by Ghostty terminal emulator",
+  "version": "0.7.0",
+  "description": "DuckDB SQL Terminal powered by Gespenst",
   "type": "module",
-  "main": "./dist/duckdb-terminal.umd.cjs",
   "module": "./dist/duckdb-terminal.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/duckdb-terminal.js",
-      "require": "./dist/duckdb-terminal.umd.cjs"
-    }
+      "import": "./dist/duckdb-terminal.js"
+    },
+    "./style.css": "./dist/duckdb-terminal.css"
   },
+  "sideEffects": [
+    "**/*.css"
+  ],
   "files": [
-    "dist"
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "vite build && tsc --emitDeclarationOnly",
@@ -42,13 +45,16 @@
   },
   "peerDependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
-    "ghostty-web": "^0.4.0"
+    "@gespenst/core": "0.1.2"
+  },
+  "dependencies": {
+    "@gespenst/web-links": "0.1.2"
   },
   "devDependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev64.0",
     "@types/node": "^22",
     "apache-arrow": "^17.0.0",
-    "ghostty-web": "^0.4.0",
+    "@gespenst/core": "0.1.2",
     "jsdom": "^30.0.1",
     "typedoc": "^0.28.20",
     "uplot": "^1.6.32",

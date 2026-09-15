@@ -37,3 +37,8 @@ npm-debug.log*
 .wrangler/
 external-projects/
 plans/
+
+# Browser integration tests
+.browser-test-dist/
+playwright-report/
+test-results/

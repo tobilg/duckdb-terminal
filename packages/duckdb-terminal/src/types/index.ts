@@ -98,10 +98,10 @@ export interface TerminalConfig {
    */
   linkDetection?: boolean;
   /**
-   * Scrollback buffer size in bytes. Larger values allow more history but use more memory.
-   * @defaultValue 10485760 (10MB)
+   * Maximum retained scrollback lines. Zero disables scrollback.
+   * @defaultValue 10000
    */
-  scrollback?: number;
+  scrollbackLines?: number;
   /**
    * Enable the charts feature (.chart command).
    * When enabled, uPlot is loaded from CDN on first use.
@@ -337,7 +337,13 @@ export interface TerminalInterface {
    * Sets the terminal theme.
    * @param theme - The theme to apply ('dark' or 'light')
    */
-  setTheme(theme: 'dark' | 'light'): void;
+  setTheme(theme: 'dark' | 'light' | Theme): Promise<void>;
+  /** Focuses the terminal input. */
+  focus(): void;
+  /** Runs a dot command when the terminal is idle, preserving pending input. */
+  runCommand(input: string): Promise<void>;
+  /** Cancels work and releases the terminal and database. */
+  destroy(): Promise<void>;
   /**
    * Gets the current theme mode.
    * @returns The current theme mode

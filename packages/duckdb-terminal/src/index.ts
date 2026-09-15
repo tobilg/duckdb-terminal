@@ -11,6 +11,7 @@
  * @example Basic usage
  * ```typescript
  * import { createTerminal } from 'duckdb-terminal';
+ * import 'duckdb-terminal/style.css';
  *
  * const terminal = await createTerminal({
  *   container: '#terminal',
@@ -25,6 +26,7 @@
  * @example With event listeners
  * ```typescript
  * import { createTerminal } from 'duckdb-terminal';
+ * import 'duckdb-terminal/style.css';
  *
  * const terminal = await createTerminal({
  *   container: document.getElementById('terminal'),

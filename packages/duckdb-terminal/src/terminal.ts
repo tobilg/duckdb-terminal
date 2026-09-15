@@ -1,4 +1,4 @@
-import { TerminalAdapter } from './terminal-adapter';
+import { TerminalAdapter, validateScrollback } from './terminal-adapter';
 import { Database } from './database';
 import { InputBuffer } from './utils/input-buffer';
 import { HistoryStore } from './utils/history';
@@ -26,7 +26,6 @@ import { copyToClipboard, readFromClipboard } from './utils/clipboard';
 import { highlightSQL, isExplainStatement, isSQLComplete } from './utils/syntax-highlight';
 import { debounce } from './utils/debounce';
 import { parseCommand } from './utils/command-parser';
-import { LinkProvider } from './utils/link-provider';
 import { TerminalOutputWriter } from './utils/terminal-output-writer';
 import { QueryActivityIndicator } from './utils/query-activity-indicator';
 import { formatExplainResultLines, isExplainResult } from './utils/explain-formatter';
@@ -77,7 +76,7 @@ class QueryCancelledError extends Error {
 }
 
 /**
- * A browser-based SQL terminal for DuckDB, powered by Ghostty terminal emulator.
+ * A browser-based SQL terminal for DuckDB, powered by Gespenst.
  *
  * DuckDBTerminal provides a full-featured SQL REPL (Read-Eval-Print Loop) that runs
  * entirely in the browser using DuckDB WASM. It supports:
@@ -155,7 +154,14 @@ export class DuckDBTerminal implements TerminalInterface {
   private loadedFiles: Map<string, FileInfo> = new Map();
   private syntaxHighlighting: boolean = true;
   private lastQueryResult: QueryResult | null = null;
-  private linkProvider: LinkProvider;
+  private linksEnabled = true;
+  private disposed = false;
+  private startPromise: Promise<void> | null = null;
+  private destroyPromise: Promise<void> | null = null;
+  private themeQueue: Promise<void> = Promise.resolve();
+  private inputOperation: Promise<void> | null = null;
+  private commandBusy = false;
+  private pendingSQL = 0;
   private outputWriter: TerminalOutputWriter;
   private queryActivityIndicator: QueryActivityIndicator;
   private pagination: PaginationHandler;
@@ -190,6 +196,7 @@ export class DuckDBTerminal implements TerminalInterface {
   private aiProvider: string = 'claude';
 
   constructor(config: TerminalConfig) {
+    validateScrollback(config);
     this.config = config;
     const maxDisplayRows = config.maxDisplayRows ?? DEFAULT_MAX_DISPLAY_ROWS;
     if (
@@ -211,10 +218,7 @@ export class DuckDBTerminal implements TerminalInterface {
     });
     this.inputBuffer = new InputBuffer();
     this.history = new HistoryStore();
-    this.linkProvider = new LinkProvider();
-    this.outputWriter = new TerminalOutputWriter(this.terminalAdapter, {
-      process: (text) => this.linkProvider.process(text),
-    });
+    this.outputWriter = new TerminalOutputWriter(this.terminalAdapter);
     this.queryActivityIndicator = new QueryActivityIndicator((text) => this.write(text));
     this.pagination = new PaginationHandler({
       write: (text) => this.write(text),
@@ -233,7 +237,7 @@ export class DuckDBTerminal implements TerminalInterface {
 
     // Configure link detection (default: enabled)
     if (config.linkDetection === false) {
-      this.linkProvider.setEnabled(false);
+      this.setLinkDetection(false);
     }
 
     // Initialize prompts from config or defaults
@@ -473,7 +477,7 @@ export class DuckDBTerminal implements TerminalInterface {
    *
    * This method performs the following initialization steps:
    * 1. Resolves the container element
-   * 2. Initializes the terminal adapter (Ghostty), database (DuckDB), and history store in parallel
+   * 2. Initializes the terminal adapter (Gespenst), database (DuckDB), and history store in parallel
    * 3. Sets up input handling and drag-and-drop file loading
    * 4. Displays the welcome message (if enabled)
    * 5. Shows the command prompt
@@ -493,16 +497,39 @@ export class DuckDBTerminal implements TerminalInterface {
    *
    * @fires ready - Emitted when initialization is complete
    */
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('Terminal is disposed'));
+    if (!this.startPromise) {
+      this.startPromise = this.startInternal().catch(async (error: unknown) => {
+        this.terminalAdapter.dispose();
+        this.history.close();
+        await this.database.close();
+        throw error;
+      });
+    }
+    return this.startPromise;
+  }
+
+  private ensureActive(): void {
+    if (this.disposed) throw new Error('Terminal is disposed');
+  }
+
+  private async startInternal(): Promise<void> {
     const container = this.resolveContainer();
 
+    this.terminalAdapter.onError((error) => {
+      this.emit('error', { message: error.message, source: 'terminal' });
+    });
     // Initialize terminal adapter first so we can show loading progress
     await this.terminalAdapter.init(container, {
       fontFamily: this.config.fontFamily,
       fontSize: this.config.fontSize,
       theme: this.getCurrentThemeObject(),
-      scrollback: this.config.scrollback,
+      scrollbackLines: this.config.scrollbackLines,
+      linkDetection: this.linksEnabled,
     });
+
+    this.ensureActive();
 
     // Show header with loading indicator
     if (this.config.welcomeMessage !== false) {
@@ -515,20 +542,21 @@ export class DuckDBTerminal implements TerminalInterface {
     }
 
     // Initialize database and history in parallel
-    await Promise.all([
-      this.database.init(),
-      this.history.init(),
-    ]);
+    const initialized = await Promise.allSettled([this.database.init(), this.history.init()]);
+    const failed = initialized.find((result) => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
+    this.ensureActive();
 
     // Load poached extension for syntax highlighting
     await this.database.loadPoachedExtension();
+    this.ensureActive();
 
     // Clear loading message and show full welcome
     if (this.config.welcomeMessage !== false) {
       // Show cursor again and clear the "Loading DuckDB WASM..." line
       this.write(vt100.CURSOR_SHOW);
       this.write('\r' + vt100.CLEAR_TO_END);
-      this.writeln(vt100.colorize('Powered by DuckDB WASM and Ghostty', vt100.FG_BRIGHT_BLACK));
+      this.writeln(vt100.colorize('Powered by DuckDB WASM and Gespenst', vt100.FG_BRIGHT_BLACK));
       this.writeln('');
       this.writeln('Type ' + vt100.colorize('.help', vt100.FG_CYAN) + ' for available commands');
       this.writeln('Enter SQL statements ending with ' + vt100.colorize(';', vt100.FG_YELLOW));
@@ -537,6 +565,7 @@ export class DuckDBTerminal implements TerminalInterface {
 
     // Set up input handling
     this.terminalAdapter.onData(this.handleInput.bind(this));
+    this.terminalAdapter.onPaste((text) => this.insertPastedText(text));
 
     // Set up terminal width for InputBuffer (for multi-line wrapping)
     this.inputBuffer.setTerminalWidth(this.terminalAdapter.cols);
@@ -564,31 +593,29 @@ export class DuckDBTerminal implements TerminalInterface {
    * Call this method when disposing of the terminal to prevent memory leaks.
    * This removes drag-and-drop handlers and clears internal state.
    */
-  destroy(): void {
-    // Clean up drag-and-drop event listeners
-    if (this.dragDropCleanup) {
-      this.dragDropCleanup();
-      this.dragDropCleanup = null;
-    }
-
-    // Clean up chart manager
-    if (this.chartManager) {
-      this.chartManager.destroy();
-      this.chartManager = null;
-    }
-
-    // Clean up sharing modal
-    if (this.sharingModal) {
-      this.sharingModal.destroy();
-      this.sharingModal = null;
-    }
-
-    // Clear event listeners
-    this.eventListeners.clear();
-
-    // Cancel any pending debounced operations
+  destroy(): Promise<void> {
+    if (this.destroyPromise) return this.destroyPromise;
+    this.disposed = true;
+    if (this.activeQueryExecution) this.activeQueryExecution.cancelRequested = true;
+    const cancellation = this.database.cancelActiveQuery().catch(() => false);
+    this.dragDropCleanup?.();
+    this.dragDropCleanup = null;
+    this.chartManager?.destroy();
+    this.chartManager = null;
+    this.sharingModal?.destroy();
+    this.sharingModal = null;
     this.debouncedHighlight.cancel();
     this.stopQueryActivity();
+    this.terminalAdapter.dispose();
+    this.eventListeners.clear();
+    this.destroyPromise = (async () => {
+      await Promise.allSettled([
+        cancellation, this.startPromise, this.queryQueue, this.inputOperation, this.themeQueue,
+      ]);
+      this.history.close();
+      await this.database.close();
+    })();
+    return this.destroyPromise;
   }
 
   /**
@@ -598,6 +625,7 @@ export class DuckDBTerminal implements TerminalInterface {
    * the user to select queries to include in a shareable URL.
    */
   openSharingModal(): void {
+    this.ensureActive();
     // Don't open if we're in a modal state already
     if (this.state === 'executing') {
       return;
@@ -777,7 +805,7 @@ export class DuckDBTerminal implements TerminalInterface {
 
     this.commands.set('.theme', {
       name: '.theme',
-      description: 'Set color theme (clears screen)',
+      description: 'Set color theme',
       usage: '.theme dark|light',
       handler: (args) => this.cmdTheme(args),
     });
@@ -922,7 +950,7 @@ export class DuckDBTerminal implements TerminalInterface {
   /**
    * Redraws the current input line from scratch.
    *
-   * After a terminal resize, Ghostty re-wraps content and the cursor position
+   * After a terminal resize, Gespenst re-wraps content and the cursor position
    * becomes unpredictable. The safest approach is to:
    * 1. Print a newline to ensure we're on a fresh line
    * 2. Redraw the prompt and content from scratch
@@ -973,12 +1001,15 @@ export class DuckDBTerminal implements TerminalInterface {
    * @param data - The raw input data from the terminal
    */
   private handleInput(data: string): void {
+    if (this.disposed) return;
     if (this.state === 'executing') {
       if (data.includes('\x03')) {
         void this.cancelQuery();
       }
       return; // Ignore all other input while executing
     }
+
+    if (this.commandBusy || this.pendingSQL) return;
 
     // Handle pagination mode
     if (this.state === 'paginating') {
@@ -1029,7 +1060,10 @@ export class DuckDBTerminal implements TerminalInterface {
     switch (char) {
       case '\r': // Enter
       case '\n':
-        this.handleEnter();
+        this.inputOperation = this.handleEnter();
+        void this.inputOperation.catch((error: unknown) => {
+          this.emit('error', { message: String(error), source: 'input' });
+        });
         return;
 
       case '\x7f': // Backspace
@@ -1179,12 +1213,17 @@ export class DuckDBTerminal implements TerminalInterface {
       // Safari requires input.click() (used by .open file picker) to be called
       // synchronously within the user gesture — awaiting history.add() first
       // breaks the transient activation chain and Safari silently blocks the dialog.
+      this.commandBusy = true;
       const historyPromise = this.history.add(input.trim());
-      await this.executeCommand(input.trim());
-      await historyPromise;
-      this.inputBuffer.clear();
-      this.writeln(''); // Add spacing after command output
-      this.showPrompt();
+      try {
+        // Invoke the command before yielding so .open retains browser user activation.
+        await Promise.all([this.executeCommand(input.trim()), historyPromise]);
+      } finally {
+        this.commandBusy = false;
+        this.inputBuffer.clear();
+        this.writeln('');
+        if (!this.disposed) this.showPrompt();
+      }
       return;
     }
 
@@ -1384,16 +1423,42 @@ export class DuckDBTerminal implements TerminalInterface {
    */
   private async handlePaste(): Promise<void> {
     const text = await readFromClipboard();
-    if (text) {
-      // Insert pasted text character by character
-      for (const char of text) {
-        if (char === '\n' || char === '\r') {
-          // Handle newlines in pasted content
-          continue;
-        }
-        this.write(this.inputBuffer.insert(char));
-      }
+    if (text) this.insertPastedText(text);
+  }
+
+  private insertPastedText(text: string): void {
+    if (this.disposed || this.commandBusy || this.state === 'executing' || this.state === 'paginating') return;
+    // Preserve the existing paste policy: insert text, skip line breaks, never execute controls.
+    const plain = text.replace(/\x1b\[(?:200|201)~/g, '').replace(/[\x00-\x1f\x7f]/g, '');
+    for (const char of plain) this.write(this.inputBuffer.insert(char));
+    this.debouncedHighlight();
+  }
+
+  /** Focuses the terminal input, including the native mobile keyboard. */
+  focus(): void { this.terminalAdapter.focus(); }
+
+  /**
+   * Runs a dot command through the same path as typed commands, preserving pending input.
+   * Rejects while executing, collecting multiline SQL, or paginating. Call directly from a
+   * click handler for file commands so the file picker retains browser user activation.
+   */
+  runCommand(input: string): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('Terminal is disposed'));
+    if (this.state !== 'idle' || this.commandBusy || this.pendingSQL) return Promise.reject(new Error('Terminal is busy'));
+    if (!input.trim().startsWith('.') || /[\r\n]/.test(input)) {
+      return Promise.reject(new Error('Expected one dot command'));
     }
+    const saved = this.inputBuffer.getContent();
+    const cursor = this.inputBuffer.getCursorPos();
+    this.write(this.inputBuffer.clearLine());
+    this.write(this.inputBuffer.insert(input.trim()));
+    const operation = this.handleEnter();
+    this.inputOperation = operation.finally(() => {
+      if (this.disposed) return;
+      this.write(this.inputBuffer.insert(saved));
+      while (this.inputBuffer.getCursorPos() > cursor) this.write(this.inputBuffer.moveLeft());
+    });
+    return this.inputOperation;
   }
 
   /**
@@ -1567,6 +1632,8 @@ export class DuckDBTerminal implements TerminalInterface {
    * ```
    */
   async executeSQL(sql: string): Promise<QueryResult | null> {
+    this.ensureActive();
+    if (this.commandBusy) throw new Error('Terminal is busy');
     return this.enqueueSQL(sql, this.createQueryExecution());
   }
 
@@ -1609,7 +1676,10 @@ export class DuckDBTerminal implements TerminalInterface {
     execution: QueryExecutionContext
   ): Promise<QueryResult | null> {
     // Chain through query queue to prevent race conditions
-    const queuedQuery = this.queryQueue.then(() => this.executeSQLInternal(sql, execution));
+    this.pendingSQL++;
+    const queuedQuery = this.queryQueue
+      .then(() => this.executeSQLInternal(sql, execution))
+      .finally(() => { this.pendingSQL--; });
     this.queryQueue = queuedQuery.catch(() => null); // Ensure queue continues even on error
     return queuedQuery;
   }
@@ -1642,7 +1712,7 @@ export class DuckDBTerminal implements TerminalInterface {
   }
 
   private throwIfQueryCancelled(execution: QueryExecutionContext): void {
-    if (execution.cancelRequested) {
+    if (execution.cancelRequested || this.disposed) {
       throw new QueryCancelledError();
     }
   }
@@ -1685,6 +1755,7 @@ export class DuckDBTerminal implements TerminalInterface {
     sql: string,
     execution: QueryExecutionContext
   ): Promise<QueryResult | null> {
+    this.ensureActive();
     this.activateQueryExecution(execution);
     const startTime = performance.now();
 
@@ -1924,7 +1995,7 @@ export class DuckDBTerminal implements TerminalInterface {
     }
   }
 
-  private cmdTheme(args: string[]): void {
+  private async cmdTheme(args: string[]): Promise<void> {
     if (args.length === 0) {
       const themeName = this.customTheme ? this.customTheme.name : this.currentThemeName;
       this.writeln(`Theme: ${themeName}`);
@@ -1932,7 +2003,7 @@ export class DuckDBTerminal implements TerminalInterface {
     }
     const theme = args[0].toLowerCase();
     if (theme === 'dark' || theme === 'light') {
-      this.setTheme(theme);
+      await this.setTheme(theme);
     } else {
       this.writeln('Usage: .theme dark|light');
     }
@@ -2051,15 +2122,15 @@ export class DuckDBTerminal implements TerminalInterface {
 
   private cmdLinks(args: string[]): void {
     if (args.length === 0) {
-      this.writeln(`URL link detection is ${this.linkProvider.isEnabled() ? 'on' : 'off'}`);
+      this.writeln(`URL link detection is ${this.linksEnabled ? 'on' : 'off'}`);
       return;
     }
     const value = args[0].toLowerCase();
     if (value === 'on') {
-      this.linkProvider.setEnabled(true);
+      this.setLinkDetection(true);
       this.writeln('URL link detection is now on');
     } else if (value === 'off') {
-      this.linkProvider.setEnabled(false);
+      this.setLinkDetection(false);
       this.writeln('URL link detection is now off');
     } else {
       this.writeln('Usage: .links on|off');
@@ -2121,7 +2192,7 @@ export class DuckDBTerminal implements TerminalInterface {
       this.outputMode = 'table';
       this.syntaxHighlighting = true;
       this.pageSize = this.maxDisplayRows;
-      this.linkProvider.setEnabled(true);
+      this.setLinkDetection(true);
       this.prompt = DEFAULT_PROMPT;
       this.continuationPrompt = DEFAULT_CONTINUATION_PROMPT;
 
@@ -2218,14 +2289,13 @@ export class DuckDBTerminal implements TerminalInterface {
    * ```
    */
   write(text: string): void {
-    this.terminalAdapter.write(text);
+    if (!this.disposed) this.terminalAdapter.write(text);
   }
 
   /**
    * Writes text to the terminal followed by a newline.
    *
-   * The text is processed for clickable URLs (if link detection is enabled)
-   * and newlines are normalized to CRLF for proper terminal display.
+   * Newlines are normalized to CRLF. Gespenst detects links in the rendered viewport.
    *
    * @param text - The text to write to the terminal
    *
@@ -2236,11 +2306,7 @@ export class DuckDBTerminal implements TerminalInterface {
    * ```
    */
   writeln(text: string): void {
-    // Process text for clickable URLs
-    const processed = this.linkProvider.process(text);
-    // Replace \n with \r\n for proper terminal line endings
-    const normalized = processed.replace(/\r?\n/g, '\r\n');
-    this.terminalAdapter.writeln(normalized);
+    if (!this.disposed) this.terminalAdapter.writeln(text);
   }
 
   /**
@@ -2272,12 +2338,12 @@ export class DuckDBTerminal implements TerminalInterface {
    *
    * @example Set a built-in theme
    * ```typescript
-   * terminal.setTheme('light');
+   * await terminal.setTheme('light');
    * ```
    *
    * @example Set a custom theme
    * ```typescript
-   * terminal.setTheme({
+   * await terminal.setTheme({
    *   name: 'my-theme',
    *   colors: {
    *     background: '#1a1b26',
@@ -2288,38 +2354,28 @@ export class DuckDBTerminal implements TerminalInterface {
    * });
    * ```
    */
-  setTheme(theme: 'dark' | 'light' | Theme): void {
-    const previousTheme = this.getCurrentThemeObject();
+  setTheme(theme: 'dark' | 'light' | Theme): Promise<void> {
+    const change = this.themeQueue.then(async () => {
+      this.ensureActive();
+      const previous = this.getCurrentThemeObject();
+      const next = typeof theme === 'object' ? theme : getTheme(theme);
+      await this.terminalAdapter.setTheme(next);
+      this.ensureActive();
+      this.customTheme = typeof theme === 'object' ? theme : null;
+      this.currentThemeName = typeof theme === 'object' ? 'custom' : theme;
+      if (typeof theme === 'string') saveTheme(theme);
+      this.chartManager?.setTheme(this.getTheme(), next.colors);
+      this.emit('themeChange', { theme: next, previous });
+    });
+    this.themeQueue = change.catch((error: unknown) => {
+      if (!this.disposed) this.emit('error', { message: String(error), source: 'theme' });
+    });
+    return change;
+  }
 
-    if (typeof theme === 'object') {
-      // Custom theme object
-      this.customTheme = theme;
-      this.currentThemeName = 'custom';
-      this.terminalAdapter.setTheme(theme);
-      this.writeln(`Theme set to ${theme.name}`);
-    } else {
-      // Built-in theme
-      this.customTheme = null;
-      this.currentThemeName = theme;
-      this.terminalAdapter.setTheme(getTheme(theme));
-      saveTheme(theme);
-      this.writeln(`Theme set to ${theme}`);
-    }
-
-    // Emit themeChange event
-    const newTheme = this.getCurrentThemeObject();
-    this.emit('themeChange', { theme: newTheme, previous: previousTheme });
-
-    // Update chart manager theme
-    if (this.chartManager) {
-      this.chartManager.setTheme(this.getTheme(), newTheme.colors);
-    }
-
-    // Update body class for page styling
-    const isLight = this.currentThemeName === 'light' ||
-      (this.customTheme?.name === 'light');
-    document.body.classList.toggle('light', isLight);
-    document.body.classList.toggle('dark', !isLight);
+  private setLinkDetection(enabled: boolean): void {
+    this.linksEnabled = enabled;
+    this.terminalAdapter.setLinkDetection(enabled);
   }
 
   /**

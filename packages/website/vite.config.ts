@@ -18,8 +18,8 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           // Keep the terminal emulator separate from the application bundle.
-          if (id.includes('ghostty-web')) {
-            return 'ghostty';
+          if (id.includes('@gespenst')) {
+            return 'gespenst';
           }
 
           // Separate DuckDB WASM into its own chunk.
@@ -31,6 +31,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@duckdb/duckdb-wasm'],
+    exclude: ['@duckdb/duckdb-wasm', '@gespenst/core'],
   },
 });

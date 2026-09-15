@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "typeRoots": ["../packages/duckdb-terminal/node_modules/@types"],
+    "types": ["node"],
+    "paths": {
+      "duckdb-terminal": ["../packages/duckdb-terminal/src/index.ts"],
+      "@gespenst/core": ["../packages/duckdb-terminal/node_modules/@gespenst/core/dist/index.d.ts"]
+    }
+  },
+  "include": ["browser/**/*.ts", "browser/**/*.mts", "../playwright.config.ts", "../packages/duckdb-terminal/src/vite-env.d.ts"]
+}

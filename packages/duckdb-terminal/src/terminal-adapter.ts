@@ -1,749 +1,315 @@
-import { Ghostty, Terminal, FitAddon } from 'ghostty-web';
+import { createTerminal, type BrowserTerminal, type Disposable, type TerminalTheme } from '@gespenst/core';
+import { WebLinksAddon } from '@gespenst/web-links';
+import '@gespenst/core/style.css';
+import wasm from '@gespenst/core/ghostty-vt.wasm?url&no-inline';
+import callbacksWasm from '@gespenst/core/ghostty-callbacks.wasm?url&no-inline';
 import type { Theme } from './types';
 
-// Injected by Vite at build time from node_modules/ghostty-web/package.json
-declare const __GHOSTTY_VERSION__: string;
-
-// CDN URL for ghostty-web WASM - version is injected at build time
-const GHOSTTY_CDN_BASE = 'https://cdn.jsdelivr.net/npm/ghostty-web';
-const getGhosttyWasmUrl = () =>
-  `${GHOSTTY_CDN_BASE}@${__GHOSTTY_VERSION__}/dist/ghostty-vt.wasm`;
-
-/**
- * Configuration options for the terminal adapter.
- */
+/** Configuration for the Gespenst browser terminal adapter. */
 export interface TerminalOptions {
-  /**
-   * Font family for the terminal text.
-   * Defaults to a stack of monospace fonts.
-   */
+  /** CSS monospace font stack. */
   fontFamily?: string;
-  /**
-   * Font size in pixels.
-   * @defaultValue 14
-   */
+  /** Font size in CSS pixels. @defaultValue 14 */
   fontSize?: number;
-  /**
-   * The color theme to apply to the terminal.
-   */
+  /** Initial terminal colors. */
   theme?: Theme;
-  /**
-   * Scrollback buffer size in bytes.
-   * @defaultValue 10485760 (10MB)
-   */
-  scrollback?: number;
+  /** Maximum retained scrollback lines; zero disables history. @defaultValue 10000 */
+  scrollbackLines?: number;
+  /** Enable HTTP(S) links in the viewport. @defaultValue true */
+  linkDetection?: boolean;
+}
+
+/** Validates the line-based setting and rejects the removed byte-based option. */
+export function validateScrollback(options: { scrollbackLines?: number }): number {
+  if ('scrollback' in options) {
+    throw new TypeError('scrollback (bytes) was removed. Use scrollbackLines (lines) instead.');
+  }
+  const lines = options.scrollbackLines ?? 10_000;
+  if (!Number.isSafeInteger(lines) || lines < 0) {
+    throw new RangeError('scrollbackLines must be a nonnegative safe integer');
+  }
+  return lines;
 }
 
 /**
- * An adapter that wraps the Ghostty terminal emulator for web use.
- *
- * This class provides a simplified interface for:
- * - Initializing the Ghostty WASM terminal
- * - Writing text and handling input
- * - Managing themes and dimensions
- * - Auto-fitting to container size
- *
- * The adapter handles all the low-level details of working with the Ghostty
- * terminal emulator, including WASM initialization, addon loading, and
- * event handling.
- *
- * @example Basic usage
- * ```typescript
- * const adapter = new TerminalAdapter();
- * await adapter.init(document.getElementById('container'), {
- *   fontSize: 16,
- *   theme: darkTheme,
- * });
- *
- * adapter.write('Hello, World!');
- * adapter.onData((input) => {
- *   console.log('User typed:', input);
- * });
- * ```
- *
- * @example Theme switching
- * ```typescript
- * const adapter = new TerminalAdapter();
- * await adapter.init(container);
- *
- * adapter.setTheme(darkTheme);
- * // Later...
- * adapter.setTheme(lightTheme);
- * ```
+ * Adapts Gespenst's byte-oriented input and asynchronous rendering to the SQL REPL.
+ * Owns browser handlers and disposes the native terminal and its addons.
  */
 export class TerminalAdapter {
-  private terminal!: Terminal;
-  private fitAddon!: FitAddon;
-  private ghostty!: Ghostty;
-  private dataHandler?: (data: string) => void;
-  private resizeHandler?: (cols: number, rows: number) => void;
+  private terminal: BrowserTerminal | null = null;
+  private initialization: Promise<void> | null = null;
+  private disposed = false;
   private currentTheme: Theme | null = null;
-  private initialized = false;
-  private container: HTMLElement | null = null;
-  private options: TerminalOptions = {};
-  private resizeObserver: ResizeObserver | null = null;
-  private mobileInput: HTMLTextAreaElement | null = null;
-  private keyboardHandler: ((event: KeyboardEvent) => void) | null = null;
+  private themeQueue: Promise<void> = Promise.resolve();
+  private dataHandler?: (data: string) => void;
+  private pasteHandler?: (text: string) => void;
+  private resizeHandler?: (cols: number, rows: number) => void;
+  private errorHandler?: (error: Error) => void;
+  private cleanups: Array<() => void> = [];
+  private links: WebLinksAddon | null = null;
+  private linksEnabled = true;
+  private selection = '';
+  private selectionRevision = 0;
+  private readonly decoder = new TextDecoder();
 
-  /**
-   * Initializes the Ghostty terminal and mounts it to the container.
-   *
-   * This method:
-   * 1. Initializes the Ghostty WASM module
-   * 2. Creates the terminal with the specified options
-   * 3. Loads the FitAddon for auto-resizing
-   * 4. Mounts the terminal to the container
-   * 5. Sets up resize observers
-   *
-   * @param container - The HTML element to mount the terminal into
-   * @param options - Configuration options for the terminal
-   * @returns A promise that resolves when initialization is complete
-   *
-   * @example
-   * ```typescript
-   * const adapter = new TerminalAdapter();
-   * await adapter.init(document.getElementById('terminal'), {
-   *   fontSize: 14,
-   *   fontFamily: 'JetBrains Mono',
-   *   theme: darkTheme,
-   * });
-   * ```
-   */
-  async init(
-    container: HTMLElement,
-    options: TerminalOptions = {}
-  ): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    // Store container and options for potential re-initialization
-    this.container = container;
-    this.options = options;
+  /** Creates the terminal, loads packaged WASM, and mounts it in the host. */
+  init(container: HTMLElement, options: TerminalOptions = {}): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('Terminal adapter is disposed'));
+    if (this.initialization) return this.initialization;
+    const scrollbackLines = validateScrollback(options);
     this.currentTheme = options.theme ?? null;
-
-    // Load Ghostty WASM from CDN
-    this.ghostty = await Ghostty.load(getGhosttyWasmUrl());
-
-    // Create the terminal instance
-    this.createTerminal();
-
-    this.initialized = true;
-    this.focus();
+    this.linksEnabled = options.linkDetection ?? true;
+    this.initialization = this.initialize(container, options, scrollbackLines);
+    return this.initialization;
   }
 
-  /**
-   * Creates or recreates the terminal instance.
-   * @internal
-   */
-  private createTerminal(): void {
-    if (!this.container) return;
-
-    // Create terminal with options (pass ghostty instance for CDN-loaded WASM)
-    this.terminal = new Terminal({
-      ghostty: this.ghostty,
-      cursorBlink: true,
-      fontSize: this.options.fontSize ?? 14,
-      fontFamily:
-        this.options.fontFamily ??
-        '"Fira Code", "Cascadia Code", "JetBrains Mono", Consolas, monospace',
-      theme: this.currentTheme ? this.themeToGhostty(this.currentTheme) : undefined,
-      // Scrollback is in bytes, not lines. 10MB is a reasonable default.
-      scrollback: this.options.scrollback ?? 10 * 1024 * 1024,
-    });
-
-    // Load fit addon
-    this.fitAddon = new FitAddon();
-    this.terminal.loadAddon(this.fitAddon);
-
-    // Clear container and open terminal
-    this.container.innerHTML = '';
-    this.terminal.open(this.container);
-
-    // Fit to container
-    this.fit();
-
-    // Handle window resize
-    window.addEventListener('resize', this.handleResize);
-
-    // Observe container resize
-    if (typeof ResizeObserver !== 'undefined') {
-      // Dispose previous observer if exists
-      this.resizeObserver?.disconnect();
-      this.resizeObserver = new ResizeObserver(() => {
-        this.fit();
+  private async initialize(container: HTMLElement, options: TerminalOptions, scrollbackLines: number): Promise<void> {
+    try {
+      const terminal = await createTerminal({
+        container, worker: 'dedicated', renderer: 'auto', wasm, callbacksWasm,
+        fontFamily: options.fontFamily ??
+          '"Fira Code", "Cascadia Code", "JetBrains Mono", Consolas, monospace',
+        fontSizePx: options.fontSize ?? 14,
+        defaultCursorBlink: true,
+        scrollbackLines,
+        theme: options.theme ? this.toTheme(options.theme) : undefined,
+        ariaLabel: 'DuckDB SQL terminal',
       });
-      this.resizeObserver.observe(this.container);
+      if (this.disposed) {
+        terminal.dispose();
+        throw new Error('Terminal adapter was disposed during initialization');
+      }
+      this.terminal = terminal;
+      const subscribe = (subscription: Disposable) => {
+        this.cleanups.push(() => subscription.dispose());
+      };
+      subscribe(terminal.on('input', ({ data, source }) => {
+        if (this.disposed) return;
+        if (source !== 'key' && source !== 'text' && source !== 'paste') return;
+        const text = this.decoder.decode(data, { stream: true });
+        if (!text) return;
+        if (source === 'paste') this.pasteHandler?.(text);
+        else this.dataHandler?.(text);
+      }));
+      subscribe(terminal.on('resize', ({ cols, rows }) => this.resizeHandler?.(cols, rows)));
+      subscribe(terminal.on('error', (error) => this.reportError(error)));
+      subscribe(terminal.on('selectionChange', () => {
+        const revision = ++this.selectionRevision;
+        void terminal.getSelection().then((selection) => {
+          if (!this.disposed && revision === this.selectionRevision) this.selection = selection;
+        }).catch((error: unknown) => this.reportError(error));
+      }));
+      this.setupKeyboard(container);
+      this.setupLinkPointers(container);
+      this.setupTouchScrolling(container);
+      this.setLinkDetection(this.linksEnabled);
+      terminal.fit();
+      terminal.focus();
+    } catch (error) {
+      this.dispose();
+      throw error;
     }
-
-    // Handle input
-    this.terminal.onData((data: string) => {
-      this.dataHandler?.(data);
-    });
-
-    // Handle resize events
-    this.terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
-      this.resizeHandler?.(cols, rows);
-    });
-
-    this.setupKeyboardShortcuts();
-
-    // Set up mobile keyboard input helper
-    this.setupMobileInput();
   }
 
-  /**
-   * Sets up a workaround for Safari's clipboard restrictions.
-   *
-   * Safari requires clipboard operations to happen synchronously within a user gesture.
-   * The async Clipboard API loses the gesture context after an await, causing copy to fail.
-   * This workaround intercepts Cmd+C and uses the synchronous execCommand method.
-   *
-   * @internal
-   */
-  private setupKeyboardShortcuts(): void {
-    this.removeKeyboardShortcuts();
+  private reportError(error: unknown): void {
+    if (!this.disposed) this.errorHandler?.(error instanceof Error ? error : new Error(String(error)));
+  }
 
-    this.keyboardHandler = (event: KeyboardEvent) => {
-      if (event.type !== 'keydown') {
+  private setupLinkPointers(container: HTMLElement): void {
+    const stop = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const handler = (event: PointerEvent) => {
+      const link = (event.target as Element).closest('a.gespenst__link');
+      if (!link) return;
+      // Core captures pointers on its root, redirecting the eventual click away
+      // from the addon link. Let the addon's target handler run, then stop bubbling.
+      link.addEventListener(event.type, stop, { once: true });
+    };
+    container.addEventListener('pointerdown', handler, true);
+    container.addEventListener('pointerup', handler, true);
+    this.cleanups.push(() => {
+      container.removeEventListener('pointerdown', handler, true);
+      container.removeEventListener('pointerup', handler, true);
+    });
+  }
+
+  private setupKeyboard(container: HTMLElement): void {
+    const handler = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      // Let the browser deliver native paste data, bypassing core's Ctrl+V encoding.
+      if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyV') {
+        event.stopPropagation();
         return;
       }
-
-      const sequence = this.getNavigationSequence(event);
+      if ((event.metaKey || (event.ctrlKey && event.shiftKey)) && event.code === 'KeyC') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.copySelection();
+        return;
+      }
+      let sequence: string | undefined;
+      if (event.key === 'Home' || (event.metaKey && event.key === 'ArrowLeft')) sequence = '\x1b[H';
+      else if (event.key === 'End' || (event.metaKey && event.key === 'ArrowRight')) sequence = '\x1b[F';
+      else if (!event.metaKey && (event.altKey || event.ctrlKey)) {
+        if (event.key === 'ArrowLeft') sequence = '\x1bb';
+        if (event.key === 'ArrowRight') sequence = '\x1bf';
+      }
       if (sequence) {
         event.preventDefault();
         event.stopPropagation();
         this.dataHandler?.(sequence);
-        return;
-      }
-
-      // Safari clipboard workaround: Cmd+C must copy synchronously during the key event.
-      // Ctrl+C still passes through to the terminal as interrupt.
-      if (event.metaKey && event.code === 'KeyC') {
-        const selection = (this.terminal as any).getSelection?.() as string | undefined;
-        if (selection && selection.length > 0) {
-          event.preventDefault();
-          event.stopPropagation();
-          this.copyToClipboardSync(selection);
-        }
       }
     };
-
-    this.container?.addEventListener('keydown', this.keyboardHandler, true);
+    container.addEventListener('keydown', handler, true);
+    this.cleanups.push(() => container.removeEventListener('keydown', handler, true));
   }
 
-  private removeKeyboardShortcuts(): void {
-    if (this.keyboardHandler) {
-      this.container?.removeEventListener('keydown', this.keyboardHandler, true);
-      this.keyboardHandler = null;
-    }
-  }
-
-  private getNavigationSequence(event: KeyboardEvent): string | null {
-    if (event.isComposing) {
-      return null;
-    }
-
-    if (event.key === 'Home' || (event.metaKey && event.key === 'ArrowLeft')) {
-      return '\x1b[H';
-    }
-
-    if (event.key === 'End' || (event.metaKey && event.key === 'ArrowRight')) {
-      return '\x1b[F';
-    }
-
-    if (!event.metaKey && (event.altKey || event.ctrlKey)) {
-      if (event.key === 'ArrowLeft') {
-        return '\x1bb';
-      }
-
-      if (event.key === 'ArrowRight') {
-        return '\x1bf';
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Copies text to clipboard using synchronous methods that work in Safari.
-   *
-   * @internal
-   * @param text - The text to copy to clipboard
-   */
-  private copyToClipboardSync(text: string): void {
-    // Create a temporary textarea for the copy operation
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.left = '-9999px';
-    textarea.style.top = '0';
-    textarea.style.opacity = '0';
-
-    document.body.appendChild(textarea);
-
-    const previouslyFocused = document.activeElement as HTMLElement;
-
-    try {
-      textarea.focus();
-      textarea.select();
-      textarea.setSelectionRange(0, text.length);
-
-      // execCommand is synchronous and works in Safari within a user gesture
-      const success = document.execCommand('copy');
-
-      if (!success) {
-        // Fallback to ClipboardItem API (also Safari-compatible when called synchronously)
-        if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
-          const blob = new Blob([text], { type: 'text/plain' });
-          const clipboardItem = new ClipboardItem({ 'text/plain': blob });
-          navigator.clipboard.write([clipboardItem]).catch(() => {
-            // Silent fail - user can try again
-          });
-        }
-      }
-    } finally {
-      document.body.removeChild(textarea);
-      // Restore focus to the terminal
-      if (previouslyFocused) {
-        previouslyFocused.focus();
+  private copySelection(): void {
+    const terminal = this.terminal;
+    if (!terminal) return;
+    // Begin the write in the key event; worker selection resolves asynchronously.
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      const text = terminal.getSelection().then((selection) => new Blob([selection], { type: 'text/plain' }));
+      void navigator.clipboard.write([new ClipboardItem({ 'text/plain': text })])
+        .catch((error: unknown) => this.reportError(error));
+    } else if (this.selection) {
+      const input = document.createElement('textarea');
+      input.value = this.selection;
+      input.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      const focused = document.activeElement as HTMLElement | null;
+      document.body.append(input);
+      try {
+        input.select();
+        document.execCommand('copy');
+      } finally {
+        input.remove();
+        focused?.focus();
       }
     }
   }
 
-  /**
-   * Sets up mobile-specific functionality: touch scrolling and keyboard input.
-   * @internal
-   */
-  private setupMobileInput(): void {
-    if (!this.container) return;
-
-    // Only set up on touch devices
-    if (!this.isTouchDevice()) return;
-
-    // Set up touch scrolling on the container
-    this.setupTouchScrolling();
-
-    // Set up mobile keyboard input
-    this.setupMobileKeyboard();
-  }
-
-  /**
-   * Creates a hidden textarea for mobile keyboard input.
-   * Appended to document.body to avoid interfering with terminal touch events.
-   * @internal
-   */
-  private setupMobileKeyboard(): void {
-    // Remove existing mobile input if present
-    this.mobileInput?.remove();
-
-    // Create textarea for mobile keyboard - append to body, not container
-    const input = document.createElement('textarea');
-    input.className = 'mobile-keyboard-input';
-    input.setAttribute('autocapitalize', 'off');
-    input.setAttribute('autocomplete', 'off');
-    input.setAttribute('autocorrect', 'off');
-    input.setAttribute('spellcheck', 'false');
-    input.setAttribute('enterkeyhint', 'send');
-    input.setAttribute('aria-label', 'Terminal input');
-
-    // Position fixed at bottom of screen, tiny but not zero-sized
-    // iOS requires non-zero size for keyboard to appear
-    input.style.cssText = `
-      position: fixed;
-      bottom: 0;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 1px;
-      height: 1px;
-      opacity: 0;
-      font-size: 16px;
-      border: none;
-      outline: none;
-      resize: none;
-      background: transparent;
-      color: transparent;
-      z-index: -1;
-    `;
-
-    // Handle input from mobile keyboard
-    input.addEventListener('input', () => {
-      const value = input.value;
-      if (value && this.dataHandler) {
-        this.dataHandler(value);
-      }
-      // Clear immediately to prevent accumulation
-      input.value = '';
-    });
-
-    // Handle special keys (Enter, Backspace, etc.)
-    input.addEventListener('keydown', (e) => {
-      // Let the input event handle regular characters
-      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        return;
-      }
-
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this.dataHandler?.('\r');
-        input.value = '';
-        // Dismiss virtual keyboard after sending command
-        input.blur();
-      } else if (e.key === 'Backspace') {
-        e.preventDefault();
-        this.dataHandler?.('\x7f');
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        this.dataHandler?.('\t');
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        this.dataHandler?.('\x1b[A');
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        this.dataHandler?.('\x1b[B');
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        this.dataHandler?.((e.altKey || e.ctrlKey) ? '\x1bb' : '\x1b[D');
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        this.dataHandler?.((e.altKey || e.ctrlKey) ? '\x1bf' : '\x1b[C');
-      } else if (e.key === 'Home') {
-        e.preventDefault();
-        this.dataHandler?.('\x1b[H');
-      } else if (e.key === 'End') {
-        e.preventDefault();
-        this.dataHandler?.('\x1b[F');
-      }
-    });
-
-    // Append to body, not container - this is crucial!
-    document.body.appendChild(input);
-    this.mobileInput = input;
-  }
-
-  /**
-   * Sets up touch-based scrolling for the terminal.
-   * Translates touch gestures into scroll commands.
-   * @internal
-   */
-  private setupTouchScrolling(): void {
-    if (!this.container) return;
-
-    let touchStartY = 0;
-    let lastTouchY = 0;
-    let isTouchScrolling = false;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        touchStartY = e.touches[0].clientY;
-        lastTouchY = touchStartY;
-        isTouchScrolling = false;
-      }
+  private setupTouchScrolling(container: HTMLElement): void {
+    let previousY: number | null = null;
+    let distance = 0;
+    let remainder = 0;
+    const start = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch' || (event.target as Element).closest('a')) return;
+      previousY = event.clientY;
+      distance = 0;
+      remainder = 0;
+      container.setPointerCapture?.(event.pointerId);
+      event.stopPropagation();
     };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 1) return;
-
-      const currentY = e.touches[0].clientY;
-      const deltaY = lastTouchY - currentY;
-
-      // Only start scrolling if there's significant movement
-      if (!isTouchScrolling && Math.abs(currentY - touchStartY) > 10) {
-        isTouchScrolling = true;
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch' || previousY === null) return;
+      const height = container.clientHeight / this.rows || 20;
+      distance += Math.abs(previousY - event.clientY);
+      remainder += (previousY - event.clientY) / height;
+      previousY = event.clientY;
+      const lines = Math.trunc(remainder);
+      if (lines) {
+        this.terminal?.scrollLines(lines);
+        remainder -= lines;
       }
-
-      if (isTouchScrolling) {
-        // Prevent default to stop page scrolling
-        e.preventDefault();
-
-        // Scroll the terminal - use scrollLines if available on terminal
-        // deltaY > 0 means scrolling up (finger moving up), show older content
-        // deltaY < 0 means scrolling down (finger moving down), show newer content
-        const lines = Math.round(deltaY / 20); // ~20px per line
-        if (lines !== 0 && this.terminal) {
-          // Use the terminal's scroll method
-          (this.terminal as any).scrollLines?.(lines);
-        }
-
-        lastTouchY = currentY;
-      }
+      event.preventDefault();
+      event.stopPropagation();
     };
-
-    const handleTouchEnd = () => {
-      isTouchScrolling = false;
+    const end = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch' || previousY === null) return;
+      previousY = null;
+      if (event.type === 'pointerup' && distance < 10) this.focus();
+      if (container.hasPointerCapture?.(event.pointerId)) container.releasePointerCapture(event.pointerId);
+      event.stopPropagation();
     };
-
-    this.container.addEventListener('touchstart', handleTouchStart, { passive: true });
-    this.container.addEventListener('touchmove', handleTouchMove, { passive: false });
-    this.container.addEventListener('touchend', handleTouchEnd, { passive: true });
-  }
-
-  /**
-   * Converts a Theme object to Ghostty's theme format.
-   *
-   * @internal
-   * @param theme - The theme to convert
-   * @returns The theme in Ghostty's expected format
-   */
-  private themeToGhostty(theme: Theme): Record<string, string> {
-    return {
-      background: theme.colors.background,
-      foreground: theme.colors.foreground,
-      cursor: theme.colors.cursor,
-      black: theme.colors.black,
-      red: theme.colors.red,
-      green: theme.colors.green,
-      yellow: theme.colors.yellow,
-      blue: theme.colors.blue,
-      magenta: theme.colors.magenta,
-      cyan: theme.colors.cyan,
-      white: theme.colors.white,
-      brightBlack: theme.colors.brightBlack,
-      brightRed: theme.colors.brightRed,
-      brightGreen: theme.colors.brightGreen,
-      brightYellow: theme.colors.brightYellow,
-      brightBlue: theme.colors.brightBlue,
-      brightMagenta: theme.colors.brightMagenta,
-      brightCyan: theme.colors.brightCyan,
-      brightWhite: theme.colors.brightWhite,
-    };
-  }
-
-  /**
-   * Handles window resize events.
-   * @internal
-   */
-  private handleResize = (): void => {
-    this.fit();
-  };
-
-  /**
-   * Fits the terminal to its container dimensions.
-   *
-   * This method should be called when the container size changes.
-   * It's automatically called on window resize, but you may need
-   * to call it manually after dynamic layout changes.
-   *
-   * @example
-   * ```typescript
-   * // After changing container size
-   * container.style.height = '500px';
-   * adapter.fit();
-   * ```
-   */
-  fit(): void {
-    if (this.fitAddon) {
-      this.fitAddon.fit();
-    }
-  }
-
-  /**
-   * Writes text to the terminal without a trailing newline.
-   *
-   * @param text - The text to write
-   *
-   * @example
-   * ```typescript
-   * adapter.write('Hello');
-   * adapter.write(' World');
-   * ```
-   */
-  write(text: string): void {
-    this.terminal?.write(text);
-  }
-
-  /**
-   * Writes a bounded output chunk and resolves on Ghostty's next render frame.
-   */
-  writeAsync(text: string): Promise<void> {
-    return new Promise((resolve) => {
-      if (!this.terminal) {
-        resolve();
-        return;
-      }
-      this.terminal.write(text, resolve);
+    const previousTouchAction = container.style.touchAction;
+    container.style.touchAction = 'none';
+    container.addEventListener('pointerdown', start, true);
+    container.addEventListener('pointermove', move, true);
+    container.addEventListener('pointerup', end, true);
+    container.addEventListener('pointercancel', end, true);
+    this.cleanups.push(() => {
+      container.style.touchAction = previousTouchAction;
+      container.removeEventListener('pointerdown', start, true);
+      container.removeEventListener('pointermove', move, true);
+      container.removeEventListener('pointerup', end, true);
+      container.removeEventListener('pointercancel', end, true);
     });
   }
 
-  /**
-   * Writes text to the terminal followed by a newline.
-   *
-   * @param text - The text to write
-   *
-   * @example
-   * ```typescript
-   * adapter.writeln('First line');
-   * adapter.writeln('Second line');
-   * ```
-   */
-  writeln(text: string): void {
-    this.terminal?.writeln(text);
+  private toTheme(theme: Theme): TerminalTheme {
+    const { selection, ...colors } = theme.colors;
+    return { ...colors, selectionBackground: selection };
   }
 
-  /**
-   * Clears the terminal screen and moves cursor to top-left.
-   *
-   * @example
-   * ```typescript
-   * adapter.clear();
-   * adapter.writeln('Fresh start!');
-   * ```
-   */
-  clear(): void {
-    this.terminal?.write('\x1b[2J\x1b[H');
-  }
+  /** Fits the grid to the host. */
+  fit(): void { this.terminal?.fit(); }
+  /** Queues output without awaiting a frame. */
+  write(text: string): void { this.terminal?.write(text); }
+  /** Resolves after output has been parsed and rendered. */
+  writeAsync(text: string): Promise<void> { return this.terminal?.writeAsync(text) ?? Promise.resolve(); }
+  /** Writes output with normalized terminal line endings. */
+  writeln(text: string): void { this.write(text.replace(/\r?\n/g, '\r\n') + '\r\n'); }
+  /** Clears the screen while retaining scrollback and terminal modes. */
+  clear(): void { this.write('\x1b[2J\x1b[H'); }
+  /** Focuses native input, including the mobile keyboard. */
+  focus(): void { this.terminal?.focus(); }
+  /** Registers keyboard and composed-text input. */
+  onData(handler: (data: string) => void): void { this.dataHandler = handler; }
+  /** Registers paste text separately from keys and control sequences. */
+  onPaste(handler: (text: string) => void): void { this.pasteHandler = handler; }
+  /** Registers grid resize notifications. */
+  onResize(handler: (cols: number, rows: number) => void): void { this.resizeHandler = handler; }
+  /** Registers asynchronous renderer and browser errors. */
+  onError(handler: (error: Error) => void): void { this.errorHandler = handler; }
+  /** Grid width, or 80 before initialization. */
+  get cols(): number { return this.terminal?.geometry.cols ?? 80; }
+  /** Grid height, or 24 before initialization. */
+  get rows(): number { return this.terminal?.geometry.rows ?? 24; }
 
-  /**
-   * Gives keyboard focus to the terminal.
-   * On mobile devices, focuses the hidden input to trigger the virtual keyboard.
-   *
-   * @example
-   * ```typescript
-   * adapter.focus();
-   * ```
-   */
-  focus(): void {
-    // On touch devices, focus the mobile input to trigger virtual keyboard
-    if (this.mobileInput && this.isTouchDevice()) {
-      this.mobileInput.focus();
-    } else {
-      this.terminal?.focus();
+  /** Enables or disables visible HTTP(S) link overlays. */
+  setLinkDetection(enabled: boolean): void {
+    this.linksEnabled = enabled;
+    if (!enabled) {
+      this.links?.dispose();
+      this.links = null;
+    } else if (this.terminal && !this.links) {
+      this.links = new WebLinksAddon({ requireModifier: true });
+      // Adapter ownership avoids retaining disposed instances after repeated toggles.
+      this.links.activate(this.terminal);
     }
   }
 
-  /**
-   * Checks if the current device supports touch input.
-   * @internal
-   */
-  private isTouchDevice(): boolean {
-    return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  /** Applies colors in order without clearing or recreating the terminal. */
+  setTheme(theme: Theme): Promise<void> {
+    const change = this.themeQueue.then(async () => {
+      if (this.disposed) throw new Error('Terminal adapter is disposed');
+      if (this.initialization) await this.initialization;
+      await this.terminal?.setTheme(this.toTheme(theme));
+      if (this.disposed) throw new Error('Terminal adapter is disposed');
+      this.currentTheme = theme;
+    });
+    this.themeQueue = change.catch(() => {});
+    return change;
   }
+  /** Last successfully applied application theme. */
+  getTheme(): Theme | null { return this.currentTheme; }
 
-  /**
-   * Registers a callback to receive user input data.
-   *
-   * The callback is invoked whenever the user types in the terminal.
-   * This includes regular characters, control sequences, and escape codes.
-   *
-   * @param handler - The callback function to handle input data
-   *
-   * @example
-   * ```typescript
-   * adapter.onData((data) => {
-   *   if (data === '\r') {
-   *     console.log('User pressed Enter');
-   *   } else {
-   *     console.log('User typed:', data);
-   *   }
-   * });
-   * ```
-   */
-  onData(handler: (data: string) => void): void {
-    this.dataHandler = handler;
-  }
-
-  /**
-   * Registers a callback to receive terminal resize events.
-   *
-   * @param handler - The callback function receiving new dimensions
-   *
-   * @example
-   * ```typescript
-   * adapter.onResize((cols, rows) => {
-   *   console.log(`Terminal resized to ${cols}x${rows}`);
-   * });
-   * ```
-   */
-  onResize(handler: (cols: number, rows: number) => void): void {
-    this.resizeHandler = handler;
-  }
-
-  /**
-   * The number of columns (characters per line) in the terminal.
-   *
-   * @returns The current column count, or 80 if not initialized
-   */
-  get cols(): number {
-    const proposed = this.fitAddon?.proposeDimensions?.();
-    return proposed?.cols ?? this.terminal?.cols ?? 80;
-  }
-
-  /**
-   * The number of rows (lines) in the terminal.
-   *
-   * @returns The current row count, or 24 if not initialized
-   */
-  get rows(): number {
-    return this.terminal?.rows ?? 24;
-  }
-
-  /**
-   * Sets the terminal color theme.
-   *
-   * Since Ghostty-web doesn't fully support runtime theme changes,
-   * this method recreates the terminal with the new theme.
-   *
-   * @param theme - The theme to apply
-   *
-   * @example
-   * ```typescript
-   * adapter.setTheme({
-   *   name: 'dark',
-   *   colors: {
-   *     background: '#1e1e1e',
-   *     foreground: '#d4d4d4',
-   *     // ... other colors
-   *   },
-   * });
-   * ```
-   */
-  setTheme(theme: Theme): void {
-    this.currentTheme = theme;
-
-    if (!this.initialized || !this.container) {
-      return;
-    }
-
-    // Dispose the old terminal
-    window.removeEventListener('resize', this.handleResize);
-    this.removeKeyboardShortcuts();
-    this.terminal?.dispose();
-
-    // Recreate the terminal with the new theme
-    this.createTerminal();
-    this.focus();
-  }
-
-  /**
-   * Gets the current terminal theme.
-   *
-   * @returns The current theme, or null if no theme is set
-   */
-  getTheme(): Theme | null {
-    return this.currentTheme;
-  }
-
-  /**
-   * Disposes of the terminal and cleans up resources.
-   *
-   * After calling this method, the adapter cannot be used again.
-   * Create a new instance if you need another terminal.
-   *
-   * @example
-   * ```typescript
-   * adapter.dispose();
-   * // adapter is no longer usable
-   * ```
-   */
+  /** Idempotently releases addons, handlers, workers, rendering, and terminal DOM. */
   dispose(): void {
-    window.removeEventListener('resize', this.handleResize);
-    this.removeKeyboardShortcuts();
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
-    this.mobileInput?.remove();
-    this.mobileInput = null;
+    if (this.disposed) return;
+    this.disposed = true;
+    ++this.selectionRevision;
+    this.links?.dispose();
+    this.links = null;
+    for (const cleanup of this.cleanups.splice(0).reverse()) cleanup();
     this.terminal?.dispose();
-    this.initialized = false;
-    this.container = null;
+    this.terminal = null;
+    this.decoder.decode();
+    this.dataHandler = undefined;
+    this.pasteHandler = undefined;
+    this.resizeHandler = undefined;
+    this.errorHandler = undefined;
   }
 }

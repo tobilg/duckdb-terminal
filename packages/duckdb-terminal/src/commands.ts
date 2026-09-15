@@ -81,7 +81,7 @@ export interface CommandContext {
   /** Get highlighted SQL */
   getHighlightedSQL: (sql: string) => string;
   /** Set theme */
-  setTheme: (theme: 'dark' | 'light') => void;
+  setTheme: (theme: 'dark' | 'light') => void | Promise<void>;
   /** Get current theme name */
   getThemeName: () => string;
   /** Load a file */
@@ -139,7 +139,7 @@ export function createCommands(ctx: CommandContext): Map<string, Command> {
 
   commands.set('.theme', {
     name: '.theme',
-    description: 'Set color theme (clears screen)',
+    description: 'Set color theme',
     usage: '.theme dark|light',
     handler: (args) => cmdTheme(args, ctx),
   });
@@ -287,14 +287,14 @@ function cmdMode(args: string[], ctx: CommandContext): void {
   }
 }
 
-function cmdTheme(args: string[], ctx: CommandContext): void {
+async function cmdTheme(args: string[], ctx: CommandContext): Promise<void> {
   if (args.length === 0) {
     ctx.writeln(`Theme: ${ctx.getThemeName()}`);
     return;
   }
   const theme = args[0].toLowerCase();
   if (theme === 'dark' || theme === 'light') {
-    ctx.setTheme(theme);
+    await ctx.setTheme(theme);
   } else {
     ctx.writeln('Usage: .theme dark|light');
   }

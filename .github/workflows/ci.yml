@@ -39,10 +39,25 @@ jobs:
       - name: Build
         run: pnpm run build
 
+  browser-tests:
+    name: Browser integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: 'pnpm-lock.yaml'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm run test:browser
+
   deploy-docs:
     name: Deploy API docs to GitHub Pages
 
-    needs: test
+    needs: [test, browser-tests]
     if: startsWith(github.ref, 'refs/tags/v')
 
     runs-on: ubuntu-latest
@@ -92,7 +107,7 @@ jobs:
 
   publish:
     name: Publish to npm
-    needs: test
+    needs: [test, browser-tests]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 

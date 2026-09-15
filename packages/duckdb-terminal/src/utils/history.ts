@@ -370,4 +370,11 @@ export class HistoryStore {
       });
     }
   }
+  /** Closes the IndexedDB connection without deleting persisted history. */
+  close(): void {
+    this.db?.close();
+    this.db = null;
+    this.initialized = false;
+  }
+
 }

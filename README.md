@@ -1,6 +1,6 @@
 # DuckDB Terminal
 
-A browser-based SQL Terminal for [DuckDB](https://duckdb.org/) powered by [Ghostty](https://ghostty.org/) terminal emulator.
+A browser-based SQL Terminal for [DuckDB](https://duckdb.org/) powered by [Gespenst](https://gespenst.dev/), using the Ghostty VT engine.
 
 ## Try it live
 The latest version is always deployed to [https://duckdb-terminal.com](https://duckdb-terminal.com).
@@ -52,7 +52,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 │  │  │ Terminal      │   │      Database       │             │            │  │
 │  │  │ Adapter       │   │                     │             │            │  │
 │  │  │               │   │ - DuckDB WASM       │             │            │  │
-│  │  │ - Ghostty     │   │   wrapper           │             │            │  │
+│  │  │ - Gespenst    │   │   wrapper           │             │            │  │
 │  │  │ - Themes      │   │ - Query execution   │             │            │  │
 │  │  │ - Keyboard    │   │ - Auto-complete     │             │            │  │
 │  │  │ - Mobile      │   │ - File loading      │             │            │  │
@@ -62,7 +62,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 │             │                     │                         │               │
 │             ▼                     ▼                         ▼               │
 │  ┌────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐   │
-│  │    Ghostty Web     │  │    DuckDB WASM      │  │     IndexedDB       │   │
+│  │     Gespenst       │  │    DuckDB WASM      │  │     IndexedDB       │   │
 │  │    (npm package)   │  │    (Web Worker)     │  │  (Command History)  │   │
 │  │                    │  │                     │  │                     │   │
 │  │ - Canvas rendering │  │ - SQL engine        │  └─────────────────────┘   │
@@ -81,7 +81,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 ## Installation
 
 ```bash
-npm install duckdb-terminal
+npm install duckdb-terminal @gespenst/core@0.1.2
 ```
 
 ## Quick Start
@@ -90,6 +90,7 @@ npm install duckdb-terminal
 
 ```typescript
 import { createTerminal } from 'duckdb-terminal';
+import 'duckdb-terminal/style.css';
 
 const Terminal = await createTerminal({
   container: '#terminal',
@@ -97,13 +98,16 @@ const Terminal = await createTerminal({
 });
 ```
 
+Give the container an explicit height, for example `height: 32rem`. Import the stylesheet once in the embedding application. The package is browser-only ESM and requires an asset-aware bundler such as Vite. Its two WASM files are shipped with the library; the terminal worker comes from the pinned Gespenst peer dependency.
+
 ### As a Standalone App
 
 ```bash
 git clone https://github.com/tobilg/duckdb-terminal.git
 cd duckdb-terminal
-npm install
-npm run dev
+pnpm install
+pnpm run build:lib
+pnpm run dev
 ```
 
 Open http://localhost:5173 in your browser.
@@ -149,8 +153,8 @@ interface TerminalConfig {
   // Enable clickable URL detection (default: true)
   linkDetection?: boolean;
 
-  // Scrollback buffer size in bytes (default: 10485760 = 10MB)
-  scrollback?: number;
+  // Maximum retained scrollback lines (default: 10000; 0 disables history)
+  scrollbackLines?: number;
 
   // Enable interactive charts feature (default: false)
   enableCharts?: boolean;
@@ -169,6 +173,7 @@ The terminal deliberately uses DuckDB-Wasm's smaller, single-threaded bundle by 
 
 ```typescript
 import { createTerminal } from 'duckdb-terminal';
+import 'duckdb-terminal/style.css';
 import { getJsDelivrBundles, getPlatformFeatures } from '@duckdb/duckdb-wasm';
 
 const features = await getPlatformFeatures();
@@ -239,7 +244,7 @@ This repository's hosted demo intentionally uses the default single-threaded bun
 | `.schema <table>` | Show table schema |
 | `.share` | Open sharing modal to share queries via URL |
 | `.tables` | List all tables |
-| `.theme dark\|light` | Switch color theme (clears screen) |
+| `.theme dark\|light` | Switch color theme without clearing output |
 | `.timer on\|off` | Toggle query timing |
 
 ## Charts
@@ -642,7 +647,7 @@ const Terminal = await createTerminal({
 });
 
 // You can also change theme at runtime
-Terminal.setTheme(tokyoNight);
+await Terminal.setTheme(tokyoNight);
 ```
 
 ### ThemeColors Reference
@@ -702,6 +707,7 @@ Creates and starts a DuckDB Terminal instance.
 
 ```typescript
 import { createTerminal } from 'duckdb-terminal';
+import 'duckdb-terminal/style.css';
 
 const Terminal = await createTerminal({
   container: document.getElementById('terminal'),
@@ -717,13 +723,13 @@ const result = await Terminal.executeSQL('SELECT 1+1 as answer');
 console.log(result); // { columns: ['answer'], rows: [[2]], rowCount: 1, duration: 5 }
 
 // Change theme
-Terminal.setTheme('light');
+await Terminal.setTheme('light');
 
 // Clear terminal
 Terminal.clear();
 
 // Clean up when done (removes event listeners, closes database)
-Terminal.destroy();
+await Terminal.destroy();
 ```
 
 ### Events
@@ -800,7 +806,7 @@ Terminal.off('queryEnd', handler);
 
 ```typescript
 import {
-  Terminal,
+  DuckDBTerminal,
   Database,
   TerminalAdapter,
   formatTable,
@@ -821,6 +827,17 @@ console.log(formatJSON(result.columns, result.rows));
 // Get completions
 const suggestions = await db.getCompletions('SEL', 3);
 ```
+
+## Migrating to Gespenst
+
+- Use ESM imports; UMD and CommonJS builds have been removed.
+- Install the exact `@gespenst/core@0.1.2` peer and import `duckdb-terminal/style.css`.
+- Replace `scrollback` (bytes) with `scrollbackLines` (lines). The default is 10,000 lines; zero disables scrollback. The removed byte option throws an explanatory error rather than silently changing units.
+- Await `terminal.setTheme(theme)` and `terminal.destroy()`. Theme changes preserve output, input, and the database; destruction cancels active work and closes rendering and database resources.
+- Use `terminal.focus()` and `await terminal.runCommand('.help')` for host controls. `runCommand` accepts one dot command, preserves pending input, and rejects while the REPL is busy or collecting multiline SQL. Invoke file commands directly inside a user click handler, before any unrelated `await`.
+- URLs use Command-click on macOS or Ctrl-click elsewhere; keyboard and touch activation need no modifier. `.links off` removes link overlays.
+
+The native terminal uses a dedicated worker with automatic fallback and does not add a cross-origin isolation requirement. Both WASM URLs are explicitly supplied to Gespenst so rebundled workers do not depend on missing relative assets. Preserve the package assets when publishing or rebundling, including below a URL base path.
 
 ## Browser Requirements
 
@@ -851,18 +868,29 @@ npm test
 npm run typecheck
 ```
 
+### Browser integration tests
+
+```bash
+pnpm exec playwright install chromium firefox webkit
+pnpm run test:browser
+```
+
+The suite builds the library, website, and a separate consumer served under `/nested/`. It verifies the real Gespenst worker, rendered SQL, editing, themes, links, and cleanup in Chromium, Firefox, and WebKit, with additional Chromium checks for pagination, cancellation, and mobile controls. It serves the installed DuckDB assets through test routes and disables optional remote extensions for deterministic startup; this does not change production extension loading. Physical iOS/Android virtual keyboards still need device testing.
+
 ## Bundle Outputs
 
 | File | Format | Usage |
 |------|--------|-------|
 | `dist/duckdb-terminal.js` | ESM | Modern bundlers |
-| `dist/duckdb-terminal.umd.cjs` | UMD | Script tags, legacy |
+| `dist/duckdb-terminal.css` | CSS | Import `duckdb-terminal/style.css` |
+| `dist/ghostty-*.wasm` | WASM | Version-matched Gespenst runtime assets |
 | `dist/*.d.ts` | TypeScript | Type definitions |
 
 ## Dependencies
 
 - [@duckdb/duckdb-wasm](https://www.npmjs.com/package/@duckdb/duckdb-wasm) - DuckDB WebAssembly build
-- [ghostty-web](https://www.npmjs.com/package/ghostty-web) - Ghostty terminal emulator for web
+- [@gespenst/core](https://www.npmjs.com/package/@gespenst/core) - Browser terminal with worker rendering
+- [@gespenst/web-links](https://www.npmjs.com/package/@gespenst/web-links) - HTTP(S) link detection
 
 ## License
 
@@ -872,4 +900,4 @@ MIT
 
 - [DuckDB](https://duckdb.org/) - The in-process analytical database
 - [Ghostty](https://ghostty.org/) - Fast, native terminal emulator
-- [ghostty-web](https://github.com/coder/ghostty-web) - Web port by Coder
+- [Gespenst](https://gespenst.dev/) - Browser terminal toolkit using Ghostty VT

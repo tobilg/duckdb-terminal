@@ -24,31 +24,24 @@ function findPackageJson(packageName: string): Record<string, unknown> {
 
 // Read versions from package.json files
 const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
-const ghosttyPkg = findPackageJson('ghostty-web');
 const uplotPkg = findPackageJson('uplot');
 
 export default defineConfig({
+  base: './',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
-    __GHOSTTY_VERSION__: JSON.stringify(ghosttyPkg.version),
     __UPLOT_VERSION__: JSON.stringify(uplotPkg.version),
   },
   build: {
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
       name: 'DuckDBTerminal',
-      formats: ['es', 'umd'],
-      fileName: (format) =>
-        format === 'es' ? 'duckdb-terminal.js' : 'duckdb-terminal.umd.cjs',
+      formats: ['es'],
+      fileName: () => 'duckdb-terminal.js',
+      cssFileName: 'duckdb-terminal',
     },
     rollupOptions: {
-      external: ['@duckdb/duckdb-wasm', 'ghostty-web'],
-      output: {
-        globals: {
-          '@duckdb/duckdb-wasm': 'duckdb',
-          'ghostty-web': 'GhosttyWeb',
-        },
-      },
+      external: ['@duckdb/duckdb-wasm', '@gespenst/core'],
     },
     minify: 'esbuild',
     target: 'es2020',

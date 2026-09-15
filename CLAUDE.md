@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DuckDB Terminal is a browser-based SQL REPL for DuckDB, powered by the Ghostty terminal emulator (via ghostty-web). It runs entirely in the browser using DuckDB WASM and provides features like syntax highlighting, auto-completion, multiple output formats, file loading, pagination, and interactive charts.
+DuckDB Terminal is a browser-based SQL REPL for DuckDB, powered by Gespenst (using Ghostty VT). It runs entirely in the browser using DuckDB WASM and provides features like syntax highlighting, auto-completion, multiple output formats, file loading, pagination, and interactive charts.
 
 ## Build Commands
 
@@ -42,7 +42,7 @@ npm run clean
 
 ## Architecture
 
-This is a monorepo using npm workspaces with two packages:
+This is a monorepo using pnpm workspaces with two packages:
 
 - **`packages/duckdb-terminal`**: The core library (published as `duckdb-terminal` on npm)
 - **`packages/website`**: Demo website that uses the library
@@ -51,7 +51,7 @@ This is a monorepo using npm workspaces with two packages:
 
 - **`index.ts`**: Library entry point, exports `createTerminal()` factory and all public APIs
 - **`terminal.ts`**: `DuckDBTerminal` class - the main orchestrator implementing the REPL loop, event system, command handling, pagination, and state management
-- **`terminal-adapter.ts`**: `TerminalAdapter` class - wraps ghostty-web, handles terminal rendering, input events, themes
+- **`terminal-adapter.ts`**: `TerminalAdapter` class - wraps @gespenst/core, handles terminal rendering, input events, themes
 - **`database.ts`**: `Database` class - wraps DuckDB WASM, handles query execution, file registration, auto-completion, SQL validation/tokenization via poached extension
 - **`commands.ts`**: Dot command definitions (`.help`, `.tables`, `.schema`, etc.)
 - **`pagination.ts`**: Pagination handler for large result sets
@@ -65,7 +65,7 @@ This is a monorepo using npm workspaces with two packages:
 
 ### Data Flow
 
-1. User input flows through `TerminalAdapter` (ghostty-web) to `DuckDBTerminal.handleInput()`
+1. User input flows through `TerminalAdapter` (@gespenst/core) to `DuckDBTerminal.handleInput()`
 2. SQL statements are collected until complete (ends with `;`), then sent to `Database.executeQuery()`
 3. Results are formatted via `utils/table-formatter.ts` and written back through `TerminalAdapter`
 4. Command history is persisted in IndexedDB via `HistoryStore`
@@ -74,7 +74,8 @@ This is a monorepo using npm workspaces with two packages:
 ## Key Dependencies
 
 - **`@duckdb/duckdb-wasm`**: DuckDB compiled to WebAssembly
-- **`ghostty-web`**: Ghostty terminal emulator for web (provides canvas-based terminal rendering)
+- **`@gespenst/core`**: Native browser terminal, worker rendering, fonts, input, and themes
+- **`@gespenst/web-links`**: Toggleable HTTP(S) links
 - **`uPlot`**: Lightweight charting library (loaded from CDN on first `.chart` use)
 
 ## Testing
@@ -104,3 +105,13 @@ does not set cross-origin isolation headers. This keeps DuckDB-Wasm's dynamic
 extensions, including Parquet, available while threaded extension artifacts
 remain incompatible upstream. Library consumers can still opt into a COI
 bundle explicitly and must serve its assets from the page's origin.
+
+## Gespenst integration
+
+The library is ESM-only. Import `duckdb-terminal/style.css` when embedding. Pin Gespenst core and web-links to 0.1.2; runtime WASM must match core. The adapter explicitly supplies both packaged WASM URLs via `?url&no-inline`, and the library uses a relative Vite base so downstream bundlers can relocate them. Do not replace these URLs with the worker defaults.
+
+`scrollbackLines` defaults to 10,000 (zero disables history); the old byte-based `scrollback` option is rejected. Theme changes and destruction are asynchronous. Website controls use `focus()` and `runCommand()`; keep file-picker calls in the original click activation. Paste is routed separately from keyboard input and terminal protocol replies never enter the SQL REPL.
+
+The adapter stops link pointer events after the addon's target handler. Gespenst 0.1.2 otherwise captures those pointers on the terminal root and redirects clicks away from the links. Keep the browser link-click regression when changing these handlers.
+
+Run `pnpm run test:browser` for production Chromium/Firefox/WebKit coverage. The fixture uses installed DuckDB assets and disables optional remote extensions for deterministic tests; retain normal extension loading in the product.

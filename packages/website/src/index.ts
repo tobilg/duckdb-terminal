@@ -3,6 +3,7 @@
  */
 
 import { createTerminal, darkTheme, lightTheme, parseShareableURL, clearShareableURL } from 'duckdb-terminal';
+import 'duckdb-terminal/style.css';
 import type { Theme, ThemeColors } from 'duckdb-terminal';
 
 // Custom theme: Tokyo Night
@@ -131,70 +132,44 @@ function getResponsiveFontSize(): number {
   return 14;
 }
 
-// Set up mobile action bar button handlers
-function setupMobileActions(terminal: Awaited<ReturnType<typeof createTerminal>>): void {
-  const keyboardBtn = document.getElementById('action-keyboard');
-  const copyBtn = document.getElementById('action-copy');
-  const clearBtn = document.getElementById('action-clear');
-  const helpBtn = document.getElementById('action-help');
-  const filesBtn = document.getElementById('action-files');
-  const shareBtn = document.getElementById('action-share');
+type Terminal = Awaited<ReturnType<typeof createTerminal>>;
+const themeClasses = Object.keys(themes);
 
-  // Open keyboard - this is the primary action for mobile users
-  keyboardBtn?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    (terminal as any).terminalAdapter?.focus();
-  });
-
-  // Copy last result to clipboard
-  copyBtn?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    await (terminal as any).copyLastResult?.();
-    (terminal as any).terminalAdapter?.focus();
-  });
-
-  // Clear terminal
-  clearBtn?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    terminal.clear();
-    (terminal as any).terminalAdapter?.focus();
-  });
-
-  // Show help
-  helpBtn?.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    // Execute .help command by writing it to the terminal
-    terminal.writeln('');
-    await terminal.executeSQL('.help;').catch(() => {
-      // .help is a command, not SQL - execute it differently
-    });
-    // Simulate typing .help and pressing enter
-    (terminal as any).terminalAdapter?.write('.help\r');
-    (terminal as any).terminalAdapter?.focus();
-  });
-
-  // Open file picker
-  filesBtn?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    // Simulate typing .open and pressing enter
-    (terminal as any).terminalAdapter?.write('.open\r');
-    (terminal as any).terminalAdapter?.focus();
-  });
-
-  // Open sharing modal
-  shareBtn?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    (terminal as any).openSharingModal?.();
-  });
+function applyPageTheme(name: string): void {
+  document.body.classList.remove(...themeClasses);
+  document.body.classList.add(name);
 }
 
-// Set up sidebar share button
-function setupSidebarShare(terminal: Awaited<ReturnType<typeof createTerminal>>): void {
-  const sidebarShareBtn = document.getElementById('sidebar-share');
+function reportActionError(terminal: Terminal, error: unknown): void {
+  terminal.writeln(`Error: ${error instanceof Error ? error.message : String(error)}`);
+  terminal.refreshPrompt();
+}
 
-  sidebarShareBtn?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    (terminal as any).openSharingModal?.();
+function setupActions(terminal: Terminal): void {
+  const bind = (id: string, action: () => void | Promise<unknown>) => {
+    document.getElementById(id)?.addEventListener('click', (event) => {
+      event.stopPropagation();
+      // Start the action synchronously; file pickers need the original click activation.
+      try {
+        const result = action();
+        if (result) void result.catch((error: unknown) => reportActionError(terminal, error));
+      } catch (error) {
+        reportActionError(terminal, error);
+      }
+    });
+  };
+  bind('action-keyboard', () => terminal.focus());
+  bind('action-copy', async () => { await terminal.copyLastResult(); terminal.focus(); });
+  bind('action-clear', () => terminal.runCommand('.clear'));
+  bind('action-help', () => terminal.runCommand('.help'));
+  bind('action-files', () => terminal.runCommand('.open'));
+  bind('action-share', () => terminal.openSharingModal());
+  bind('sidebar-share', () => terminal.openSharingModal());
+  terminal.on('stateChange', ({ state }) => {
+    for (const id of ['action-help', 'action-files', 'action-clear']) {
+      const button = document.getElementById(id) as HTMLButtonElement | null;
+      if (button) button.disabled = state !== 'idle';
+    }
   });
 }
 
@@ -210,9 +185,7 @@ async function main() {
   const savedTheme = themes[savedThemeName] || darkTheme;
 
   // Apply theme class to body
-  const themeClasses = ['dark', 'light', 'tokyo-night', 'dracula', 'solarized-dark'];
-  themeClasses.forEach((cls) => document.body.classList.remove(cls));
-  document.body.classList.add(savedThemeName);
+  applyPageTheme(savedThemeName);
 
   // Set dropdown to saved value
   const themeSelect = document.getElementById('theme-select') as HTMLSelectElement;
@@ -220,6 +193,7 @@ async function main() {
     themeSelect.value = savedThemeName;
   }
 
+  container.setAttribute('aria-busy', 'true');
   try {
     // Create and start the terminal with responsive font size
     const terminal = await createTerminal({
@@ -230,32 +204,26 @@ async function main() {
       enableCharts: true,
     });
 
-    // Set up theme dropdown
-    if (themeSelect) {
-      themeSelect.addEventListener('change', () => {
-        const themeName = themeSelect.value;
-        const theme = themes[themeName];
-        if (theme) {
-          // Save theme and reload to apply
-          // (Ghostty-web doesn't support runtime theme changes reliably)
-          // Note: Command history is preserved (in IndexedDB), but terminal
-          // scrollback output will be cleared due to the page reload.
-          saveThemeName(themeName);
-          window.location.reload();
-        }
-      });
-    }
-
-    // Focus terminal on click
-    container.addEventListener('click', () => {
-      (terminal as any).terminalAdapter?.focus();
+    terminal.on('themeChange', ({ theme }) => {
+      const name = themes[theme.name] ? theme.name : terminal.getTheme();
+      saveThemeName(name);
+      applyPageTheme(name);
+      if (themeSelect) themeSelect.value = name;
     });
-
-    // Set up mobile action buttons
-    setupMobileActions(terminal);
-
-    // Set up sidebar share button
-    setupSidebarShare(terminal);
+    themeSelect?.addEventListener('change', () => {
+      const theme = themes[themeSelect.value];
+      if (theme) void terminal.setTheme(theme).catch((error: unknown) => reportActionError(terminal, error));
+    });
+    setupActions(terminal);
+    container.setAttribute('aria-busy', 'false');
+    let restoreFocus = false;
+    window.addEventListener('pagehide', (event) => {
+      if (event.persisted) restoreFocus = container.contains(document.activeElement);
+      else void terminal.destroy().catch((error: unknown) => console.error('Terminal cleanup failed', error));
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted && restoreFocus) terminal.focus();
+    });
 
     // Check for shared queries in URL
     const sharedQueries = parseShareableURL();
@@ -284,6 +252,7 @@ async function main() {
       terminal.refreshPrompt();
     }
   } catch (error) {
+    container.setAttribute('aria-busy', 'false');
     console.error('Failed to initialize terminal:', error);
     // Use textContent to prevent XSS from error messages
     const errorDiv = document.createElement('div');

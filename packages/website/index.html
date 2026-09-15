@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DuckDB Terminal - Browser-based SQL Terminal</title>
-    <meta name="description" content="DuckDB Terminal - A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export." />
+    <meta name="description" content="DuckDB Terminal - A browser-based SQL terminal powered by DuckDB WASM and Gespenst. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export." />
     <meta name="keywords" content="DuckDB, SQL, terminal, database, browser, query, WASM, analytics, charts, data visualization, interactive charts" />
     <meta name="author" content="TobiLG" />
     <link rel="canonical" href="https://duckdb-terminal.com/" />
@@ -12,7 +12,7 @@
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:title" content="DuckDB Terminal - Browser-based SQL Terminal" />
-    <meta property="og:description" content="A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export." />
+    <meta property="og:description" content="A browser-based SQL terminal powered by DuckDB WASM and Gespenst. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export." />
     <meta property="og:url" content="https://duckdb-terminal.com/" />
     <meta property="og:image" content="https://duckdb-terminal.com/images/og.png" />
     <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="DuckDB Terminal - Browser-based SQL Terminal" />
-    <meta name="twitter:description" content="A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export." />
+    <meta name="twitter:description" content="A browser-based SQL terminal powered by DuckDB WASM and Gespenst. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export." />
     <meta name="twitter:image" content="https://duckdb-terminal.com/images/og.png" />
 
     <!-- Additional OG tags -->
@@ -45,7 +45,7 @@
       "@context": "https://schema.org",
       "@type": "WebApplication",
       "name": "DuckDB Terminal",
-      "description": "A browser-based SQL terminal powered by DuckDB WASM and Ghostty. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export.",
+      "description": "A browser-based SQL terminal powered by DuckDB WASM and Gespenst. Run SQL queries directly in your browser with interactive charts, multiple themes, and data export.",
       "url": "https://duckdb-terminal.com/",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Any",
@@ -68,7 +68,7 @@
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
       "name": "DuckDB Terminal",
-      "description": "Browser-based SQL terminal powered by DuckDB WASM and Ghostty",
+      "description": "Browser-based SQL terminal powered by DuckDB WASM and Gespenst",
       "applicationCategory": "WebApplication",
       "operatingSystem": "Web Browser",
       "softwareVersion": "0.3.0",
@@ -239,42 +239,6 @@
         flex: 1;
         overflow: hidden;
         padding: 10px 10px 10px 10px;
-      }
-
-      /* Hide Safari's native caret and selection in contenteditable terminal container */
-      #terminal-container > div {
-        caret-color: transparent;
-        /* Disable Safari's native selection highlighting */
-        -webkit-user-select: none;
-        user-select: none;
-        /* Disable Safari's tap highlight */
-        -webkit-tap-highlight-color: transparent;
-        /* Prevent Safari from showing focus outline */
-        outline: none;
-      }
-
-      /* Ensure terminal canvas extends to edge */
-      #terminal-container > div {
-        width: 100% !important;
-      }
-
-      /* Hide any native selection in the terminal */
-      #terminal-container > div::selection {
-        background: transparent;
-      }
-      #terminal-container > div::-moz-selection {
-        background: transparent;
-      }
-
-      /* Fix Safari canvas rendering issues */
-      #terminal-container canvas {
-        /* Ensure canvas doesn't inherit any text-related styles */
-        -webkit-font-smoothing: antialiased;
-        /* Prevent Safari from applying image smoothing artifacts */
-        image-rendering: -webkit-optimize-contrast;
-        /* Ensure proper compositing */
-        transform: translateZ(0);
-        -webkit-transform: translateZ(0);
       }
 
       .loading {
@@ -483,9 +447,13 @@
         gap: 8px;
         z-index: 100;
         padding-bottom: env(safe-area-inset-bottom, 0);
+        max-width: calc(100vw - 24px);
+        overflow-x: auto;
+        align-items: center;
       }
 
       .action-btn {
+        flex-shrink: 0;
         width: 44px;
         height: 44px;
         border-radius: 50%;
@@ -894,7 +862,7 @@
           </div>
         </div>
       </aside>
-      <div id="terminal-container" />
+      <div id="terminal-container"></div>
       <!-- Mobile Action Bar -->
       <div class="mobile-actions" id="mobile-actions">
         <button class="action-btn action-btn-primary" id="action-keyboard" title="Open keyboard">
