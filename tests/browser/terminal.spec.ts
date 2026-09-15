@@ -96,12 +96,20 @@ test('keyboard editing, paste, history, resize and composition', async ({ page }
 });
 
 test('live theme changes preserve scrollback, input, and database', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
   await openFixture(page);
   await sql(page, 'CREATE TABLE preserved AS SELECT 123 AS value');
   await sql(page, 'SELECT * FROM preserved');
+  // Programmatic SQL leaves the prompt to the caller before interactive input resumes.
+  await page.evaluate(() => window.fixture.terminal.refreshPrompt());
+  await page.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
   await page.locator('.gespenst__input').pressSequentially('SELECT ');
+  await expect.poll(() => page.evaluate(() => window.fixture.input)).toBe('SELECT ');
   const before = await text(page);
+  expect(before).toContain('🦆 SELECT ');
   await page.evaluate(() => window.fixture.terminal.setTheme('light'));
+  // Exercise the pending 150 ms input redraw even on a fast local machine.
+  await page.clock.runFor(200);
   expect(await text(page)).toBe(before);
   expect(await page.evaluate(() => window.fixture.input)).toBe('SELECT ');
   expect(await page.evaluate(() => window.workerStatus.filter((worker) => worker.name === 'gespenst').length)).toBe(1);
