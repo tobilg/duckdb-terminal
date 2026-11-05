@@ -153,6 +153,21 @@ describe('Local AI commands', () => {
       await vi.waitFor(() => expect(latest()).toContain('No model selected.'));
     });
 
+    it('keeps the download progress in one row on narrow terminals', async () => {
+      (internals.terminalAdapter.terminal as unknown as { geometry: { cols: number } }).geometry.cols = 40;
+      type('.model 2\r');
+      await waitForOutput('(yes/no)');
+      type('yes\r');
+      await waitForOutput('Installed MiniCPM5 1B (Q4_K_M).');
+      await waitUntilIdle();
+
+      const progress = output().split(/\r\n?/).filter((line) => line.includes('% ('));
+      expect(progress).toEqual([
+        'Downloading… 0% (0 MiB of 656 MiB)', 'Downloading… 50% (0 MiB of 0 MiB)', 'Downloading… 100% (0 MiB of 0 MiB)',
+      ]);
+      expect(progress.every((line) => line.length < 40)).toBe(true);
+    });
+
     it('selects an installed model without asking again', async () => {
       mock.state.cachedUrls.add(getModelUrl(AI_MODELS[2]));
       type('.model 3\r');

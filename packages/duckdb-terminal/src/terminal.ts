@@ -217,7 +217,9 @@ export class DuckDBTerminal implements TerminalInterface {
     this.inputBuffer = new InputBuffer();
     this.history = new HistoryStore();
     this.outputWriter = new TerminalOutputWriter(this.terminalAdapter);
-    this.queryActivityIndicator = new QueryActivityIndicator((text) => this.write(text));
+    this.queryActivityIndicator = new QueryActivityIndicator((text) => this.write(text), {
+      columns: () => this.terminalAdapter.cols,
+    });
     this.pagination = new PaginationHandler({
       write: (text) => this.write(text),
       writeln: (text) => this.writeln(text),
@@ -2462,6 +2464,7 @@ export class DuckDBTerminal implements TerminalInterface {
     if (!this.aiAssistant) {
       this.aiAssistant = new AIAssistant({
         write: (text) => this.write(text),
+        columns: () => this.terminalAdapter.cols,
         getSchema: (options) => this.buildSchemaContext(options),
         runQuery: (sql, signal) => this.runAssistantQuery(sql, signal),
       });
@@ -2583,9 +2586,12 @@ export class DuckDBTerminal implements TerminalInterface {
       const percent = total > 0 ? Math.min(100, Math.floor((loaded / total) * 100)) : 0;
       if (percent === lastPercent) return;
       lastPercent = percent;
-      this.write(`\r${vt100.CLEAR_LINE}${vt100.dim(
-        `Downloading ${model.label}… ${percent}% (${formatMiB(loaded)} of ${formatMiB(total)}, Ctrl+C to cancel)`
-      )}`);
+      const amount = `${formatMiB(loaded)} of ${formatMiB(total)}`;
+      this.write(`\r${vt100.CLEAR_LINE}${vt100.dim(vt100.fitLine([
+        `Downloading ${model.label}… ${percent}% (${amount}, Ctrl+C to cancel)`,
+        `Downloading… ${percent}% (${amount})`,
+        `${percent}% (${amount})`,
+      ], this.terminalAdapter.cols))}`);
     };
     showProgress(0, model.sizeBytes);
     try {

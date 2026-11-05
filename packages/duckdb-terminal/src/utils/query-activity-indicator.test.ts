@@ -43,4 +43,16 @@ describe('QueryActivityIndicator', () => {
     expect(write.mock.calls.at(-1)?.[0]).toBe(`\r${vt100.CLEAR_LINE}`);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('should stay within one row on narrow terminals', () => {
+    vi.useFakeTimers();
+    const write = vi.fn();
+    const indicator = new QueryActivityIndicator(write, { delayMs: 0, now: () => 0, columns: () => 20 });
+
+    indicator.start();
+    vi.advanceTimersByTime(0);
+    indicator.stop();
+
+    expect(write.mock.calls[0][0]).toBe(`\r${vt100.CLEAR_LINE}${vt100.dim('Running… 0s')}`);
+  });
 });

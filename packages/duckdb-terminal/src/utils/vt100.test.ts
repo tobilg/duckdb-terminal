@@ -20,6 +20,7 @@ import {
   cursorLeft,
   cursorRight,
   cursorColumn,
+  fitLine,
 } from './vt100';
 
 describe('VT100 constants', () => {
@@ -152,5 +153,21 @@ describe('cursor movement functions', () => {
 
   it('cursorColumn should generate correct sequence', () => {
     expect(cursorColumn(15)).toBe('\x1b[15G');
+  });
+});
+
+describe('fitLine', () => {
+  it('returns the first variant that fits in one row, leaving the last column free', () => {
+    expect(fitLine(['Downloading model… 5% (1 of 9 MiB)', 'Downloading… 5%', '5%'], 20)).toBe('Downloading… 5%');
+    expect(fitLine(['a long first variant', 'short'], 21)).toBe('a long first variant');
+  });
+
+  it('shortens the last variant with an ellipsis when none fits', () => {
+    expect(fitLine('Loading Qwen3.5 0.8B on the GPU', 12)).toBe('Loading Qw…');
+    expect(fitLine(['first one', 'second one'], 6)).toBe('seco…');
+  });
+
+  it('keeps lines when the width is unknown', () => {
+    expect(fitLine('any length at all', Infinity)).toBe('any length at all');
   });
 });

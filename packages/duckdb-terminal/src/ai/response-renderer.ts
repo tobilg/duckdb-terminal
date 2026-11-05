@@ -27,11 +27,15 @@ export class ResponseRenderer {
   /** Trailing whitespace with a line break, written only if more text follows. */
   private pendingBreaks = '';
 
-  constructor(private readonly write: (text: string) => void) {}
+  constructor(
+    private readonly write: (text: string) => void,
+    /** Terminal width in columns; status lines stay within one row. */
+    private readonly columns: () => number = () => Infinity
+  ) {}
 
   /** Shows or replaces the in-place status line. */
   status(text: string): void {
-    this.write(`\r${vt100.CLEAR_LINE}${vt100.dim(text)}`);
+    this.write(`\r${vt100.CLEAR_LINE}${vt100.dim(vt100.fitLine(text, this.columns()))}`);
     this.statusVisible = true;
   }
 

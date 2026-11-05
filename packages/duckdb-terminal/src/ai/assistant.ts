@@ -83,6 +83,8 @@ export interface QueryOutcome {
 export interface AssistantHost {
   /** Writes raw terminal output. */
   write(text: string): void;
+  /** Terminal width in columns, so in-place status lines fit in one row. */
+  columns?(): number;
   /** Returns the schema as DDL, with sample data as requested, or an empty string. */
   getSchema(options: SchemaContextOptions): Promise<string>;
   /** Runs a statement the model requested and shows it and its result to the user. */
@@ -451,7 +453,7 @@ export class AIAssistant {
     if (!model) {
       throw new AssistantError('No model selected. Run .model to choose and install one.');
     }
-    const renderer = new ResponseRenderer((text) => this.host.write(text));
+    const renderer = new ResponseRenderer((text) => this.host.write(text), () => this.host.columns?.() ?? Infinity);
     this.turnTimings = [];
     try {
       const engine = await this.loadEngine(model, renderer, signal);

@@ -184,3 +184,18 @@ export function stripAnsiCodes(text: string): string {
 export function visibleLength(text: string): number {
   return stripAnsiCodes(text).length;
 }
+
+/**
+ * Fits a line that is redrawn in place (`\r` and clear line) into one terminal
+ * row. A longer line wraps, and `\r` then returns only to its last row, so each
+ * redraw left the earlier rows behind (on phones, the download progress filled
+ * the screen). Returns the first variant that fits in `columns - 1` columns, or
+ * the last one shortened with "…". Expects text without escape codes.
+ */
+export function fitLine(variants: string | readonly string[], columns: number): string {
+  const options = typeof variants === 'string' ? [variants] : variants;
+  const maxLength = Math.max(1, columns - 1);
+  const fitting = options.find((option) => [...option].length <= maxLength);
+  if (fitting !== undefined) return fitting;
+  return [...options[options.length - 1]].slice(0, maxLength - 1).join('').trimEnd() + '…';
+}

@@ -59,4 +59,11 @@ describe('ResponseRenderer', () => {
     renderer.finish();
     expect(plain()).toBe('first\r\nThinking\r\nagain\r\n');
   });
+
+  it('keeps the status line within one row', () => {
+    const writes: string[] = [];
+    const renderer = new ResponseRenderer((text) => writes.push(text), () => 30);
+    renderer.status('Loading Qwen3.5 0.8B (Q4_0) on the GPU (WebGPU)…');
+    expect(writes).toEqual([`\r${CLEAR_LINE}${DIM}Loading Qwen3.5 0.8B (Q4_0)…\x1b[0m`]);
+  });
 });

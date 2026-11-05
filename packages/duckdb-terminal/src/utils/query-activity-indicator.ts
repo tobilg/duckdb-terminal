@@ -7,6 +7,8 @@ export interface QueryActivityIndicatorOptions {
   delayMs?: number;
   updateIntervalMs?: number;
   now?: () => number;
+  /** Terminal width in columns; the indicator stays within one row. */
+  columns?: () => number;
 }
 
 /**
@@ -20,6 +22,7 @@ export class QueryActivityIndicator {
   private readonly delayMs: number;
   private readonly updateIntervalMs: number;
   private readonly now: () => number;
+  private readonly columns: () => number;
 
   constructor(
     private readonly write: (text: string) => void,
@@ -28,6 +31,7 @@ export class QueryActivityIndicator {
     this.delayMs = options.delayMs ?? DEFAULT_DELAY_MS;
     this.updateIntervalMs = options.updateIntervalMs ?? DEFAULT_UPDATE_INTERVAL_MS;
     this.now = options.now ?? (() => performance.now());
+    this.columns = options.columns ?? (() => Infinity);
   }
 
   start(): void {
@@ -58,8 +62,10 @@ export class QueryActivityIndicator {
 
   private render(): void {
     const elapsedSeconds = Math.max(0, Math.floor((this.now() - this.startedAt) / 1_000));
-    this.write(
-      `\r${vt100.CLEAR_LINE}${vt100.dim(`Running… ${elapsedSeconds}s (Ctrl+C to cancel)`)}`
+    const text = vt100.fitLine(
+      [`Running… ${elapsedSeconds}s (Ctrl+C to cancel)`, `Running… ${elapsedSeconds}s`],
+      this.columns()
     );
+    this.write(`\r${vt100.CLEAR_LINE}${vt100.dim(text)}`);
   }
 }
