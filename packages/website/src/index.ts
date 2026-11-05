@@ -125,10 +125,12 @@ function saveThemeName(name: string): void {
 }
 
 // Calculate responsive font size based on viewport width
+/** The small-screen layout of index.html: up to 768px wide, or phones in landscape. */
+const SMALL_SCREEN = '(max-width: 768px), (orientation: landscape) and (max-height: 500px)';
+
 function getResponsiveFontSize(): number {
-  const width = window.innerWidth;
-  if (width <= 480) return 12;
-  if (width <= 768) return 13;
+  if (window.innerWidth <= 480) return 12;
+  if (window.matchMedia(SMALL_SCREEN).matches) return 13;
   return 14;
 }
 
@@ -145,11 +147,61 @@ function reportActionError(terminal: Terminal, error: unknown): void {
   terminal.refreshPrompt();
 }
 
+/**
+ * The menu at the end of the side or top bar on small screens, which holds the
+ * documentation and package links. Returns a function that closes it.
+ */
+function setupLinksMenu(): () => void {
+  const toggle = document.getElementById('actions-toggle');
+  const menu = document.getElementById('actions-menu');
+  if (!toggle || !menu) return () => {};
+  const close = () => {
+    menu.hidden = true;
+    toggle.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    menu.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
+    // Below the button and aligned to its right edge in the top bar, beside it in the
+    // side bar, and inside the screen either way.
+    const button = toggle.getBoundingClientRect();
+    const bar = (toggle.closest('.sidebar') ?? toggle).getBoundingClientRect();
+    const horizontal = bar.width > bar.height;
+    const left = horizontal ? button.right - menu.offsetWidth : bar.right;
+    const top = horizontal ? bar.bottom : button.top;
+    menu.style.left = `${Math.max(4, Math.min(left, window.innerWidth - menu.offsetWidth - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(top, window.innerHeight - menu.offsetHeight - 4))}px`;
+  };
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (menu.hidden) open();
+    else close();
+  });
+  // Capture phase: the terminal handles its own pointer events.
+  document.addEventListener('pointerdown', (event) => {
+    const target = event.target as Node;
+    if (!menu.hidden && !menu.contains(target) && !toggle.contains(target)) close();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !menu.hidden) {
+      close();
+      toggle.focus();
+    }
+  });
+  menu.addEventListener('click', (event) => {
+    if ((event.target as Element).closest('a')) close();
+  });
+  window.addEventListener('resize', close);
+  return close;
+}
+
 function setupActions(terminal: Terminal): void {
+  const closeMenu = setupLinksMenu();
   const bind = (id: string, action: () => void | Promise<unknown>) => {
     document.getElementById(id)?.addEventListener('click', (event) => {
       event.stopPropagation();
-      // Start the action synchronously; file pickers need the original click activation.
+      closeMenu();
+      // Start the action synchronously; file pickers and the on-screen keyboard need the original tap.
       try {
         const result = action();
         if (result) void result.catch((error: unknown) => reportActionError(terminal, error));

@@ -204,8 +204,35 @@ test('website themes and mobile actions use the public API', async ({ page, brow
   await expect(page.locator('#terminal-container')).toHaveAttribute('aria-busy', 'false');
   // The website is served cross-origin isolated (public/_headers) so wllama can use several CPU threads.
   expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
+  // On small screens the terminal actions are icons in the top bar.
   await page.locator('#action-keyboard').click();
   await expect(page.locator('.gespenst__input')).toBeFocused();
+  // The documentation and package links are in a menu at the right end of the top bar.
+  const rightEdges = await page.locator('.sidebar .sidebar-item').evaluateAll((items) => items
+    .filter((item) => item.getBoundingClientRect().width > 0)
+    .map((item) => ({ id: item.id, right: item.getBoundingClientRect().right })));
+  expect(rightEdges.reduce((last, item) => (item.right > last.right ? item : last)).id).toBe('actions-toggle');
+  const menu = page.locator('#actions-menu');
+  const openMenu = async () => {
+    await page.locator('#actions-toggle').click();
+    await expect(menu).toBeVisible();
+  };
+  await openMenu();
+  expect(await menu.locator('a').evaluateAll((links) => links.map((link) => link.getAttribute('href')))).toEqual([
+    '/guide/',
+    'https://tobilg.github.io/duckdb-terminal/',
+    'https://sql-workbench.com',
+    'https://github.com/tobilg/duckdb-terminal',
+    'https://www.npmjs.com/package/duckdb-terminal',
+  ]);
+  const bar = await page.locator('.sidebar').boundingBox();
+  const box = await menu.boundingBox();
+  expect(box!.y).toBeGreaterThanOrEqual(bar!.y + bar!.height - 1);
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  // A tap outside closes the menu.
+  await page.locator('#terminal-container').click({ position: { x: 100, y: 300 } });
+  await expect(menu).toBeHidden();
   let navigations = 0;
   page.on('framenavigated', () => navigations++);
   await page.locator('#theme-select').selectOption('dracula');
@@ -215,6 +242,38 @@ test('website themes and mobile actions use the public API', async ({ page, brow
   await page.locator('#action-files').click();
   await (await picker).setFiles({ name: 'data.csv', mimeType: 'text/csv', buffer: Buffer.from('id,name\n1,duck\n') });
   await page.locator('#action-help').click();
+  // All items fit side by side on a narrow phone, and one above the other in landscape.
+  const overlaps = () => page.locator('.sidebar .sidebar-item').evaluateAll((items) => {
+    const boxes = items.map((item) => item.getBoundingClientRect()).filter((box) => box.width > 0);
+    const horizontal = boxes[boxes.length - 1].left > boxes[0].right;
+    const spans = boxes.map((box) => (horizontal ? [box.left, box.right] : [box.top, box.bottom]));
+    const outside = spans.some(([, end]) => end > (horizontal ? innerWidth : innerHeight) + 0.5);
+    return outside || spans.some(([start], index) => index > 0 && start < spans[index - 1][1] - 0.5);
+  });
+  // The page follows the visual viewport's resize event, which arrives after the resize.
+  await page.setViewportSize({ width: 360, height: 740 });
+  await expect.poll(overlaps).toBe(false);
+  await page.setViewportSize({ width: 740, height: 360 });
+  await expect.poll(overlaps).toBe(false);
+  // Phones in landscape are wider than 768px but short: the same layout, with the menu button at the bottom.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.locator('#action-keyboard')).toBeVisible();
+  await expect(page.locator('.sidebar a[href="/guide/"]')).toBeHidden();
+  await expect.poll(overlaps).toBe(false);
+  const bottomEdges = await page.locator('.sidebar .sidebar-item').evaluateAll((items) => items
+    .filter((item) => item.getBoundingClientRect().height > 0)
+    .map((item) => ({ id: item.id, bottom: item.getBoundingClientRect().bottom })));
+  expect(bottomEdges.reduce((last, item) => (item.bottom > last.bottom ? item : last)).id).toBe('actions-toggle');
+  await openMenu();
+  const landscapeMenu = await menu.boundingBox();
+  expect(landscapeMenu!.y + landscapeMenu!.height).toBeLessThanOrEqual(390);
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  // Desktop keeps the links in the side bar, without action icons or menu.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator('#actions-toggle')).toBeHidden();
+  await expect(page.locator('#action-keyboard')).toBeHidden();
+  await expect(page.locator('.sidebar a[href="/guide/"]')).toBeVisible();
 });
 
 test('selection copying resolves real worker text inside the clipboard item', async ({ page }) => {
