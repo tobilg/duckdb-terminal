@@ -1446,6 +1446,7 @@
               </thead>
               <tbody>
                 <tr><td><code>.clearhistory</code></td><td>Clear command history</td></tr>
+                <tr><td><code>.clearmodels</code></td><td>Remove the downloaded AI models from the browser</td></tr>
                 <tr><td><code>.reset</code></td><td>Reset database and all settings</td></tr>
               </tbody>
             </table>
@@ -1746,7 +1747,7 @@ Local AI models (run in your browser with wllama)
 Select a model (1-4): 1
 Do you want to install the selected model (size 537 MiB) in your browser (yes/no) yes
 Installed Qwen3.5 0.8B (Q4_0). Ask it with .ai &lt;prompt&gt;</code></pre>
-            <p>Each model is downloaded once from the Hugging Face Hub and cached in your browser. Picking a model that is already installed switches to it without asking. <code>.model 2</code> skips the menu, and <kbd>Ctrl</kbd>+<kbd>C</kbd> cancels a download.</p>
+            <p>Each model is downloaded once from the Hugging Face Hub and cached in your browser. Picking a model that is already installed switches to it without asking. <code>.model 2</code> skips the menu, and <kbd>Ctrl</kbd>+<kbd>C</kbd> cancels a download. <code>.clearmodels</code> lists the downloaded models, including interrupted downloads, and removes them after you confirm.</p>
             <table>
               <thead>
                 <tr><th>#</th><th>Model</th><th>Hugging Face repository</th><th>Size</th></tr>
@@ -1779,6 +1780,7 @@ Installed Qwen3.5 0.8B (Q4_0). Ask it with .ai &lt;prompt&gt;</code></pre>
               </thead>
               <tbody>
                 <tr><td><code>.model [1-4]</code></td><td>Choose, download, and select a local AI model</td></tr>
+                <tr><td><code>.clearmodels</code></td><td>Remove the downloaded models from the browser</td></tr>
                 <tr><td><code>.ai &lt;prompt&gt;</code></td><td>Ask the selected model about your data</td></tr>
               </tbody>
             </table>

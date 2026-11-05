@@ -186,6 +186,55 @@ describe('Local AI commands', () => {
     });
   });
 
+  describe('.clearmodels', () => {
+    it('is listed in .help', async () => {
+      type('.help\r');
+      await waitForOutput('SQL statements must end with a semicolon');
+      expect(output()).toMatch(/\.clearhistory {2}Clear command history\s+\.clearmodels {2}Remove downloaded AI models from the browser\s+\.copy/);
+    });
+
+    it('says when no models are stored', async () => {
+      type('.clearmodels\r');
+      await waitForOutput('No AI models are stored in this browser.');
+      await waitUntilIdle();
+      expect(output()).not.toContain('(yes/no)');
+    });
+
+    it('lists the stored models and keeps them on "no"', async () => {
+      mock.state.cachedUrls.add(getModelUrl(AI_MODELS[0]));
+      mock.state.cachedUrls.add(getModelUrl(AI_MODELS[2]));
+      mock.state.invalidUrls.add(getModelUrl(AI_MODELS[2]));
+      type('.clearmodels\r');
+      await waitForOutput('Remove all 2 (0 MiB) from your browser? (yes/no) ');
+
+      expect(output()).toMatch(/Qwen3\.5 0\.8B \(Q4_0\)\s+0 MiB/);
+      expect(output()).toMatch(/Qwen3\.5 2B \(Q4_K_XL\)\s+0 MiB\s+incomplete download/);
+      type('no\r');
+      await waitForOutput('Nothing removed.');
+      await waitUntilIdle();
+      expect(mock.state.removed).toEqual([]);
+    });
+
+    it('removes the models after "yes" and forgets the selected one', async () => {
+      mock.state.cachedUrls.add(getModelUrl(AI_MODELS[0]));
+      mock.state.sizes.set(getModelUrl(AI_MODELS[0]), 563_036_064);
+      type('.model 1\r');
+      await waitForOutput('Using Qwen3.5 0.8B (Q4_0).');
+      await waitUntilIdle();
+
+      type('.clearmodels\r');
+      await waitForOutput('Remove it (537 MiB) from your browser? (yes/no) ');
+      type('yes\r');
+      await waitForOutput('Removed 1 model (537 MiB). Run .model to download one again.');
+      await waitUntilIdle();
+
+      expect(mock.state.removed).toEqual([getModelUrl(AI_MODELS[0])]);
+      expect(localStorage.getItem(SELECTED_MODEL_STORAGE_KEY)).toBeNull();
+      type('.ai hi\r');
+      await waitForOutput('No model selected');
+    });
+  });
+
   describe('.ai', () => {
     function selectInstalledModel() {
       mock.state.cachedUrls.add(getModelUrl(AI_MODELS[0]));

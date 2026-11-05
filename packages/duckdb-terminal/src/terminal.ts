@@ -44,7 +44,7 @@ import type {
   TerminalEventListener,
 } from './types';
 import { saveTheme, getSavedTheme, getTheme } from './themes';
-import { AIAssistant, AssistantError, type QueryOutcome, type SchemaContextOptions } from './ai/assistant';
+import { AIAssistant, AssistantError, type QueryOutcome, type SchemaContextOptions, type StoredModel } from './ai/assistant';
 import { AI_MODELS, formatMiB, type AIModel } from './ai/models';
 import { databaseAlias, isDatabaseFile, notAttachedNote, readerFor } from './ai/file-urls';
 
@@ -904,6 +904,12 @@ export class DuckDBTerminal implements TerminalInterface {
       description: 'Choose and install a local AI model',
       usage: `.model [1-${AI_MODELS.length}]`,
       handler: (args) => this.cmdModel(args),
+    });
+
+    this.commands.set('.clearmodels', {
+      name: '.clearmodels',
+      description: 'Remove downloaded AI models from the browser',
+      handler: () => this.cmdClearModels(),
     });
 
     this.commands.set('.ai', {
@@ -2596,6 +2602,51 @@ export class DuckDBTerminal implements TerminalInterface {
       }
     } finally {
       if (this.commandAbort === controller) this.commandAbort = null;
+    }
+  }
+
+  /** Handles `.clearmodels`: lists the downloaded models and removes them after confirmation. */
+  private async cmdClearModels(): Promise<void> {
+    const assistant = this.getAssistant();
+    let stored: StoredModel[];
+    try {
+      stored = await assistant.getStoredModels();
+    } catch (error) {
+      this.writeln(vt100.colorize(`Could not check downloaded models: ${errorMessage(error)}`, vt100.FG_YELLOW));
+      return;
+    }
+    if (stored.length === 0) {
+      this.writeln(vt100.dim('No AI models are stored in this browser.'));
+      return;
+    }
+
+    const labelWidth = Math.max(...stored.map(({ model }) => model.label.length));
+    this.writeln(vt100.bold('Downloaded AI models'));
+    for (const { model, bytes, complete } of stored) {
+      this.writeln(
+        `  ${model.label.padEnd(labelWidth)}  ${formatMiB(bytes).padStart(8)}` +
+        (complete ? '' : `  ${vt100.dim('incomplete download')}`)
+      );
+    }
+    this.writeln('');
+    const total = stored.reduce((sum, { bytes }) => sum + bytes, 0);
+    const answer = await this.readLine(
+      `Remove ${stored.length === 1 ? 'it' : `all ${stored.length}`} (${formatMiB(total)}) from your browser? (yes/no) `
+    );
+    if (!isYes(answer)) {
+      this.writeln(vt100.dim('Nothing removed.'));
+      return;
+    }
+
+    try {
+      const freed = await assistant.removeStoredModels();
+      this.writeln(vt100.colorize(
+        `Removed ${stored.length === 1 ? '1 model' : `${stored.length} models`} (${formatMiB(freed)}). ` +
+        'Run .model to download one again.',
+        vt100.FG_GREEN
+      ));
+    } catch (error) {
+      this.writeln(vt100.colorize(`Could not remove the models: ${errorMessage(error)}`, vt100.FG_RED));
     }
   }
 

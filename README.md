@@ -229,6 +229,7 @@ This repository's hosted demo intentionally uses the default single-threaded Duc
 | `.chart [options]` | Show interactive chart of last query result |
 | `.clear` | Clear the terminal |
 | `.clearhistory` | Clear command history |
+| `.clearmodels` | Remove the downloaded AI models from the browser |
 | `.copy` | Copy last query results to clipboard |
 | `.download [filename]` | Download last result as file (format based on mode) |
 | `.examples` | Show example queries |
@@ -405,7 +406,7 @@ Do you want to install the selected model (size 537 MiB) in your browser (yes/no
 Installed Qwen3.5 0.8B (Q4_0). Ask it with .ai <prompt>
 ```
 
-Each model is downloaded once from the Hugging Face Hub and cached in the browser's Origin Private File System. Picking a model that is already installed switches to it without asking. `.model 2` skips the menu, and Ctrl+C cancels a download.
+Each model is downloaded once from the Hugging Face Hub and cached in the browser's Origin Private File System. Picking a model that is already installed switches to it without asking. `.model 2` skips the menu, and Ctrl+C cancels a download. `.clearmodels` lists the downloaded models, including interrupted downloads, and removes them after you confirm.
 
 | # | Model | Hugging Face repository | Size |
 |---|-------|-------------------------|------|

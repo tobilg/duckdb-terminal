@@ -13,6 +13,10 @@ export function createWllamaMock() {
   const state = {
     cachedUrls: new Set<string>(),
     invalidUrls: new Set<string>(),
+    /** Size of cached models in bytes; 1000 when not set. */
+    sizes: new Map<string, number>(),
+    /** URLs removed with `Model.remove()`. */
+    removed: [] as string[],
     scripts: [] as ScriptStep[][],
     /** Messages of each chat request, copied when the request was made. */
     requests: [] as ChatCompletionMessage[][],
@@ -30,8 +34,15 @@ export function createWllamaMock() {
 
   class FakeModel {
     constructor(readonly url: string) {}
+    get size() {
+      return state.sizes.get(this.url) ?? 1000;
+    }
     validate() {
       return state.invalidUrls.has(this.url) ? 'invalid' : 'valid';
+    }
+    async remove() {
+      state.cachedUrls.delete(this.url);
+      state.removed.push(this.url);
     }
   }
 

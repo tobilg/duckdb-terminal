@@ -37,6 +37,7 @@ function setup(options: { gpu?: boolean; compat?: boolean; schema?: string } = {
   const storage = {
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
   };
   const searchDocs = vi.fn(async (_query: string): Promise<DocsChunk[]> => PIVOT_DOCS);
   const create = () => new AIAssistant(host, {
@@ -119,6 +120,39 @@ describe('AIAssistant model management', () => {
       expect(assistant.hasWebGPU()).toBe(false);
       expect(assistant.cpuReason()).toBe('WebGPU is not available in this browser');
     });
+  });
+
+  it('lists the stored catalog models with their size, including interrupted downloads', async () => {
+    const context = setup();
+    context.wllama.state.cachedUrls.add(getModelUrl(small));
+    context.wllama.state.cachedUrls.add(getModelUrl(medium));
+    context.wllama.state.cachedUrls.add('https://example.com/other.gguf');
+    context.wllama.state.invalidUrls.add(getModelUrl(medium));
+    context.wllama.state.sizes.set(getModelUrl(medium), 250);
+
+    expect(await context.create().getStoredModels()).toEqual([
+      { model: small, bytes: 1000, complete: true },
+      { model: medium, bytes: 250, complete: false },
+    ]);
+  });
+
+  it('removes the catalog models, unloads the loaded one, and forgets the selection', async () => {
+    const context = setup();
+    const assistant = ready(context);
+    context.wllama.state.cachedUrls.add(getModelUrl(medium));
+    context.wllama.state.cachedUrls.add('https://example.com/other.gguf');
+    context.wllama.state.scripts.push([contentChunk('ok'), finishChunk('stop')]);
+    await assistant.ask('hi', new AbortController().signal);
+    expect(context.store.get(SELECTED_MODEL_STORAGE_KEY)).toBe(small.id);
+
+    expect(await assistant.removeStoredModels()).toBe(2000);
+
+    expect(context.wllama.state.removed).toEqual([getModelUrl(small), getModelUrl(medium)]);
+    expect([...context.wllama.state.cachedUrls]).toEqual(['https://example.com/other.gguf']);
+    expect(context.wllama.state.exits).toBe(1);
+    expect(assistant.selectedModel).toBeUndefined();
+    expect(context.store.has(SELECTED_MODEL_STORAGE_KEY)).toBe(false);
+    await expect(assistant.ask('hi', new AbortController().signal)).rejects.toThrow(/No model selected/);
   });
 
   it('persists the selected model and restores it', () => {

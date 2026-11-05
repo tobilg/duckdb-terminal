@@ -95,6 +95,15 @@ export interface ModelStatus {
   installed: boolean;
 }
 
+/** A catalog model stored in this browser's model cache. */
+export interface StoredModel {
+  model: AIModel;
+  /** Bytes it takes up in the cache. */
+  bytes: number;
+  /** False for an interrupted download. */
+  complete: boolean;
+}
+
 export interface InstallOptions {
   onProgress?: (loaded: number, total: number) => void;
   signal?: AbortSignal;
@@ -106,7 +115,7 @@ export interface AssistantOptions {
   /** URL of wllama's WASM binary. */
   wasmUrl?: string;
   /** Persists the selected model; defaults to localStorage when available. */
-  storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
   /**
    * Reports whether models run on the GPU; defaults to whether the browser has
    * WebGPU and is not Firefox (see {@link AIAssistant.cpuReason}).
@@ -230,7 +239,7 @@ const QUIET_WLLAMA_CONFIG: WllamaConfig = {
   },
 };
 
-function defaultStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+function defaultStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage;
   } catch {
@@ -290,7 +299,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal, onAbort?: () => 
 export class AIAssistant {
   private readonly importWllama: () => Promise<WllamaModuleType>;
   private readonly wasmUrl: string;
-  private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  private readonly storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null;
   private readonly webGPU: () => boolean;
   private readonly firefox: () => boolean;
   private readonly needsCompatBuild: () => boolean;
@@ -387,6 +396,41 @@ export class AIAssistant {
       model,
       installed: cached.some((entry) => entry.url === getModelUrl(model) && isValid(entry)),
     }));
+  }
+
+  /** The catalog models stored in this browser, including interrupted downloads. */
+  async getStoredModels(): Promise<StoredModel[]> {
+    const cached = await (await this.getModelManager()).getModels();
+    return AI_MODELS.flatMap((model) => {
+      const entry = cached.find((cachedModel) => cachedModel.url === getModelUrl(model));
+      return entry ? [{ model, bytes: Math.max(0, entry.size), complete: isValid(entry) }] : [];
+    });
+  }
+
+  /**
+   * Removes the catalog models from the browser cache and returns the bytes
+   * freed. Unloads the model first (some browsers cannot delete open files) and
+   * forgets the selection, which starts a new conversation. Leaves other files
+   * in wllama's cache alone: the page may use wllama for something else.
+   */
+  async removeStoredModels(): Promise<number> {
+    const urls = new Set(AI_MODELS.map(getModelUrl));
+    const stored = (await (await this.getModelManager()).getModels()).filter((model) => urls.has(model.url));
+    await this.unloadEngine();
+    let freed = 0;
+    for (const model of stored) {
+      const bytes = Math.max(0, model.size);
+      await model.remove();
+      freed += bytes;
+    }
+    this.selectedId = null;
+    this.resetConversation();
+    try {
+      this.storage?.removeItem(SELECTED_MODEL_STORAGE_KEY);
+    } catch {
+      // Storage can be unavailable in private windows.
+    }
+    return freed;
   }
 
   /** Downloads `model` into the browser cache. */
