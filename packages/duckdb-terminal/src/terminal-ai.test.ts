@@ -24,6 +24,8 @@ vi.mock('./ai/wllama-loader', () => ({
   loadWllama: vi.fn(async () => wllama.current!.module),
   getWllamaWasmUrl: () => 'https://cdn.test/wllama.wasm',
   getWllamaModuleUrl: () => 'https://cdn.test/wllama.js',
+  getWllamaCompatUrls: () => ({ worker: 'https://cdn.test/compat/wllama.js', wasm: 'https://cdn.test/compat/wllama.wasm' }),
+  canRunDefaultBuild: () => true,
 }));
 vi.mock('./database', () => ({
   Database: vi.fn().mockImplementation(function() {

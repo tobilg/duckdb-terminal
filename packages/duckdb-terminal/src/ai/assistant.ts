@@ -37,7 +37,13 @@ import {
 } from './prompt';
 import { ResponseRenderer, type GenerationStats } from './response-renderer';
 import { DEFAULT_TUNING, type AssistantTuning } from './tuning';
-import { getWllamaWasmUrl, loadWllama, type WllamaModuleType } from './wllama-loader';
+import {
+  canRunDefaultBuild,
+  getWllamaCompatUrls,
+  getWllamaWasmUrl,
+  loadWllama,
+  type WllamaModuleType,
+} from './wllama-loader';
 
 /** localStorage key of the selected model. */
 export const SELECTED_MODEL_STORAGE_KEY = 'duckdb-terminal-ai-model';
@@ -101,8 +107,20 @@ export interface AssistantOptions {
   wasmUrl?: string;
   /** Persists the selected model; defaults to localStorage when available. */
   storage?: Pick<Storage, 'getItem' | 'setItem'> | null;
-  /** Reports whether WebGPU is available; defaults to checking `navigator.gpu`. */
+  /**
+   * Reports whether models run on the GPU; defaults to whether the browser has
+   * WebGPU and is not Firefox (see {@link AIAssistant.cpuReason}).
+   */
   hasWebGPU?: () => boolean;
+  /** Reports whether the browser is Firefox; defaults to checking the user agent. */
+  isFirefox?: () => boolean;
+  /**
+   * Reports whether models need wllama's compat build; defaults to whether the
+   * browser cannot run the default build (no JSPI or Memory64, such as Safari 27).
+   */
+  needsCompatBuild?: () => boolean;
+  /** URLs of the compat build's worker script and WASM. */
+  compatUrls?: { worker: string; wasm: string };
   /** Searches the documentation; defaults to the bundled DuckDB docs. */
   searchDocs?: (query: string) => Promise<DocsChunk[]>;
   /** Overrides of DEFAULT_TUNING. */
@@ -220,6 +238,21 @@ function defaultStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
   }
 }
 
+/**
+ * Makes `engine` load wllama's compat build. `setCompat()` is not enough:
+ * wllama uses the compat build only when its own check finds JSPI or Memory64
+ * missing, and Safari 27 passes that check although it cannot run the default
+ * build (https://github.com/ngxson/wllama/issues/297). So this replaces the
+ * method that picks the build, as wllama 3.8 implements it.
+ */
+function useCompatBuild(engine: Wllama, urls: { worker: string; wasm: string }): void {
+  (engine as unknown as { getWorkerResources(): object }).getWorkerResources = () => ({
+    wasmPath: urls.wasm,
+    jsPath: urls.worker,
+    compat: true,
+  });
+}
+
 /** A cached model whose files are all present (an interrupted download is invalid). */
 function isValid(model: Model): boolean {
   return String(model.validate()) === 'valid';
@@ -259,6 +292,9 @@ export class AIAssistant {
   private readonly wasmUrl: string;
   private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
   private readonly webGPU: () => boolean;
+  private readonly firefox: () => boolean;
+  private readonly needsCompatBuild: () => boolean;
+  private readonly compatUrls: { worker: string; wasm: string };
   private readonly docsSearch: (query: string) => Promise<DocsChunk[]>;
   private settings: AssistantTuning;
   private cacheClient: Wllama | null = null;
@@ -275,7 +311,10 @@ export class AIAssistant {
     this.importWllama = options.loadWllama ?? loadWllama;
     this.wasmUrl = options.wasmUrl ?? getWllamaWasmUrl();
     this.storage = options.storage === undefined ? defaultStorage() : options.storage;
-    this.webGPU = options.hasWebGPU ?? (() => typeof navigator !== 'undefined' && 'gpu' in navigator);
+    this.firefox = options.isFirefox ?? (() => typeof navigator !== 'undefined' && /Firefox\//.test(navigator.userAgent));
+    this.webGPU = options.hasWebGPU ?? (() => typeof navigator !== 'undefined' && 'gpu' in navigator && !this.firefox());
+    this.needsCompatBuild = options.needsCompatBuild ?? (() => !canRunDefaultBuild());
+    this.compatUrls = options.compatUrls ?? getWllamaCompatUrls();
     this.docsSearch = options.searchDocs ?? ((query) => searchDocs(query));
     this.settings = { ...DEFAULT_TUNING, ...options.tuning };
     let saved: string | null = null;
@@ -292,9 +331,19 @@ export class AIAssistant {
     return findModel(this.selectedId);
   }
 
-  /** Whether the browser exposes WebGPU; without it models run on the CPU. */
+  /** Whether models run on the GPU with WebGPU; otherwise they run on the CPU. */
   hasWebGPU(): boolean {
     return this.webGPU();
+  }
+
+  /**
+   * Why models run on the CPU, or null when they use WebGPU. Firefox has WebGPU
+   * but completes GPU work only on a 100 ms timer (Mozilla bug 1870699), which
+   * makes generation far slower than its CPU (https://github.com/ngxson/wllama/issues/296).
+   */
+  cpuReason(): string | null {
+    if (this.hasWebGPU()) return null;
+    return this.firefox() ? "Firefox's WebGPU is too slow for these models" : 'WebGPU is not available in this browser';
   }
 
   /** The settings that shape answers. */
@@ -809,6 +858,7 @@ export class AIAssistant {
     const gpu = this.hasWebGPU();
     renderer.status(`Loading ${model.label} on the ${gpu ? 'GPU (WebGPU)' : 'CPU'}…`);
     const engine = new WllamaClass({ default: this.wasmUrl }, QUIET_WLLAMA_CONFIG);
+    if (this.needsCompatBuild()) useCompatBuild(engine, this.compatUrls);
     try {
       await abortable(
         engine.loadModel(cached, {

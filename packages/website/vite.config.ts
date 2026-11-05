@@ -4,9 +4,17 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/** The cross-origin isolation headers of the deployed site (public/_headers), so dev and preview match it. */
+const CROSS_ORIGIN_ISOLATION = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
 export default defineConfig({
   root: __dirname,
   publicDir: 'public',
+  server: { headers: CROSS_ORIGIN_ISOLATION },
+  preview: { headers: CROSS_ORIGIN_ISOLATION },
   build: {
     outDir: 'dist',
     chunkSizeWarningLimit: 600,

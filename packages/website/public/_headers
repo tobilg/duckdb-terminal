@@ -1,0 +1,9 @@
+# Cloudflare Pages response headers (copied to dist/ by Vite).
+# Cross-origin isolation lets the AI assistant (wllama) use several CPU threads,
+# which Firefox needs: its WebGPU is too slow for the models. DuckDB keeps its
+# single-threaded bundle: the jsDelivr manifest has no threaded one.
+# Every cross-origin resource must send CORS or Cross-Origin-Resource-Policy
+# headers (jsDelivr, extensions.duckdb.org, and Hugging Face do).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

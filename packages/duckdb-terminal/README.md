@@ -231,7 +231,7 @@ CREATE TABLE orders AS SELECT * FROM 'https://example.com/orders.csv';
 `.model` lists four models (Qwen3.5 0.8B, MiniCPM5 1B, Qwen3.5 2B, Qwen3.5 4B, from 537 MiB to 2.7 GiB), downloads the chosen one from Hugging Face once, and caches it in OPFS. `.ai` sends the question with the current schema, and the model answers using two tools: `query` runs SQL, and `search_docs` searches the DuckDB documentation that ships with the package. Questions can also name Parquet, CSV, or JSON URLs and DuckDB database URLs, which the model attaches read-only.
 
 - **The model's statements run without confirmation**, including ones that change data. Keep a copy of data you cannot recreate.
-- It needs WebGPU for usable speed (current Chrome and Edge) and disk space for the model cache.
+- It needs WebGPU for usable speed and disk space for the model cache. It runs well in current Chrome, Edge, and Safari; Safari uses wllama's compatibility build (16 MB, also from jsDelivr). Firefox runs models on the CPU, because its WebGPU waits about 100 ms for each GPU synchronization ([Mozilla bug 1870699](https://bugzilla.mozilla.org/show_bug.cgi?id=1870699)). On the CPU, wllama uses several threads only when the page is cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`); without that, Firefox is too slow to use, and even with it the first answer takes a few minutes.
 - [wllama](https://github.com/ngxson/wllama) is loaded from jsDelivr on first use; nothing AI-related is downloaded until `.model` or `.ai` runs.
 
 ## Assets, CDNs, and Content Security Policy

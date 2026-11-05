@@ -2528,9 +2528,14 @@ export class DuckDBTerminal implements TerminalInterface {
         (notes.length > 0 ? `  ${notes.join(', ')}` : '')
       );
     });
-    if (!assistant.hasWebGPU()) {
+    const cpuReason = assistant.cpuReason();
+    if (cpuReason) {
+      // wllama uses several CPU threads only on cross-origin isolated pages.
+      const threads = globalThis.crossOriginIsolated
+        ? ''
+        : ' on one thread (the page is not cross-origin isolated)';
       this.writeln(vt100.colorize(
-        'WebGPU is not available in this browser: models run on the CPU, which is much slower.',
+        `${cpuReason}: models run on the CPU${threads}, which is much slower.`,
         vt100.FG_YELLOW
       ));
     }

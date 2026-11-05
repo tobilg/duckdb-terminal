@@ -24,6 +24,34 @@ export const getWllamaModuleUrl = (): string =>
 export const getWllamaWasmUrl = (): string =>
   `${WLLAMA_CDN_BASE}@${__WLLAMA_VERSION__}/esm/wasm/wllama.wasm`;
 
+/** wllama's build for browsers without JSPI or Memory64, released with the same versions as wllama. */
+const WLLAMA_COMPAT_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@wllama/wllama-compat';
+
+/** The worker script and WASM of wllama's compat build (wasm32 with Asyncify). */
+export const getWllamaCompatUrls = (): { worker: string; wasm: string } => ({
+  worker: `${WLLAMA_COMPAT_CDN_BASE}@${__WLLAMA_VERSION__}/wasm/wllama.js`,
+  wasm: `${WLLAMA_COMPAT_CDN_BASE}@${__WLLAMA_VERSION__}/wasm/wllama.wasm`,
+});
+
+/** `(module (memory i64 1))`: a module with one Memory64 page. */
+const MEMORY64_MODULE = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 5, 3, 1, 4, 1]);
+
+/**
+ * Whether the browser can run wllama's default build, which needs JSPI and
+ * Memory64. wllama checks Memory64 by creating a 64-bit memory, which Safari 27
+ * allows although it cannot compile Memory64 modules; its worker then fails,
+ * and the load never finishes (https://github.com/ngxson/wllama/issues/297).
+ * Validating a Memory64 module answers reliably.
+ */
+export function canRunDefaultBuild(): boolean {
+  try {
+    return typeof (WebAssembly as { Suspending?: unknown }).Suspending === 'function'
+      && WebAssembly.validate(MEMORY64_MODULE);
+  } catch {
+    return false;
+  }
+}
+
 let loading: Promise<WllamaModuleType> | null = null;
 
 /** Imports the wllama module once; a failed import can be retried. */

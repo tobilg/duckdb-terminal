@@ -164,6 +164,8 @@ test('website themes and mobile actions use the public API', async ({ page, brow
   // Wait until DuckDB has completed startup and installed its input callback.
   await expect(page.locator('.gespenst__input')).toBeAttached();
   await expect(page.locator('#terminal-container')).toHaveAttribute('aria-busy', 'false');
+  // The website is served cross-origin isolated (public/_headers) so wllama can use several CPU threads.
+  expect(await page.evaluate(() => crossOriginIsolated)).toBe(true);
   await page.locator('#action-keyboard').click();
   await expect(page.locator('.gespenst__input')).toBeFocused();
   let navigations = 0;

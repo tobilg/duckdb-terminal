@@ -19,6 +19,8 @@ export function createWllamaMock() {
     /** Options of each chat request. */
     requestOptions: [] as Record<string, unknown>[],
     loads: [] as Array<{ url: string; params: LoadModelParams | undefined }>,
+    /** What `getWorkerResources()` returned for each load: the build wllama would start. */
+    workerResources: [] as unknown[],
     downloads: [] as string[],
     /** Settles a pending download when resolved; leave null to finish immediately. */
     downloadGate: null as Promise<void> | null,
@@ -59,8 +61,14 @@ export function createWllamaMock() {
       if (state.constructorError) throw state.constructorError;
     }
 
+    /** Mirrors wllama 3.8's choice of build, which the assistant replaces for the compat build. */
+    getWorkerResources(): object {
+      return { wasmPath: this.paths.default, compat: false };
+    }
+
     loadModel = vi.fn(async (model: FakeModel, params?: LoadModelParams) => {
       state.loads.push({ url: model.url, params });
+      state.workerResources.push(this.getWorkerResources());
     });
 
     createChatCompletion = vi.fn(async (options: { messages: ChatCompletionMessage[] }) => {

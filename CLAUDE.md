@@ -88,6 +88,7 @@ Dot commands (`.help`, `.tables`, `.model`, `.ai`, etc.) are registered and impl
 ## Local AI (wllama)
 
 - wllama is not bundled. `ai/wllama-loader.ts` imports its ESM build and WASM from jsDelivr, pinned through `__WLLAMA_VERSION__` to the exact `@wllama/wllama` devDependency. Import types from `@wllama/wllama/esm/index.js`; the package's `main` entry points to a file that is not published.
+- Browsers that cannot run wllama's default build (JSPI and Memory64) get its compat build from `@wllama/wllama-compat` at the same version (released in step with wllama). `canRunDefaultBuild()` validates a Memory64 module, because wllama's own check (creating a 64-bit memory) passes in Safari 27, which cannot compile Memory64 ([ngxson/wllama#297](https://github.com/ngxson/wllama/issues/297)); wllama then lost the worker's error and the load hung. `useCompatBuild()` therefore replaces wllama's `getWorkerResources()` on the engine instance: re-check it when updating wllama. Firefox runs models on the CPU (`hasWebGPU()` is false there): its WebGPU completes GPU work only on a 100 ms timer (Mozilla bug 1870699, ngxson/wllama#296), about 0.5 tokens/s. On the CPU wllama uses several threads only on cross-origin isolated pages; `.model` says when it runs on one.
 - `ai/models.ts` holds the four models offered by `.model` with exact byte sizes from Hugging Face; update `sizeBytes` whenever a model file changes. wllama caches downloads in OPFS.
 - `.model` reads its answers through `readLine()`, which takes over keyboard input while a command waits. Ctrl+C during a busy dot command aborts `commandAbort`.
 - Model-requested SQL runs through `runAssistantQuery()` without confirmation, including statements that change data; the README and website guide say so. The system prompts tell the model to change data only when asked.
@@ -124,11 +125,18 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-The hosted website intentionally uses the default one-thread EH/MVP bundle and
-does not set cross-origin isolation headers. This keeps DuckDB-Wasm's dynamic
-extensions, including Parquet, available while threaded extension artifacts
-remain incompatible upstream. Library consumers can still opt into a COI
-bundle explicitly and must serve its assets from the page's origin.
+The hosted website intentionally uses the default one-thread DuckDB-Wasm
+bundle. This keeps DuckDB-Wasm's dynamic extensions, including Parquet,
+available while threaded extension artifacts remain incompatible upstream.
+It is served cross-origin isolated (`packages/website/public/_headers` for
+Cloudflare Pages, and the same headers in the website's Vite dev and preview
+servers) so the AI assistant's wllama can use several CPU threads; DuckDB
+stays single-threaded because the jsDelivr manifest has no threaded bundle.
+With `require-corp`, every cross-origin resource needs CORS or
+`Cross-Origin-Resource-Policy` headers (jsDelivr, extensions.duckdb.org, and
+Hugging Face send them); check that before adding one. Library consumers can
+still opt into a COI bundle explicitly and must serve its assets from the
+page's origin.
 
 ## Gespenst integration
 

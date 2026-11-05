@@ -219,7 +219,7 @@ Only the bundle selected for the current browser is downloaded. If `maximumThrea
 
 DuckDB-Wasm's published `wasm_threads` extensions currently cannot be loaded by the COI bundle because their memory is not linked as shared. This affects Parquet, JSON, spatial, and other dynamically loaded extensions. See [duckdb-wasm#2041](https://github.com/duckdb/duckdb-wasm/issues/2041) and [extension-ci-tools#391](https://github.com/duckdb/extension-ci-tools/issues/391). Applications opting into multithreading must either avoid those extensions or provide compatible custom builds.
 
-This repository's hosted demo intentionally uses the default single-threaded bundle so file import and extension autoloading remain available. It does not serve COI assets or enable cross-origin isolation.
+This repository's hosted demo intentionally uses the default single-threaded DuckDB bundle so file import and extension autoloading remain available, and it does not serve COI assets. It is served cross-origin isolated (`packages/website/public/_headers`), so the AI assistant can use several CPU threads; DuckDB stays single-threaded because the default jsDelivr manifest has no threaded bundle.
 
 ## Terminal Commands
 
@@ -440,7 +440,8 @@ The terminal streams the model's reasoning (dimmed, under "Thinking") and then i
 
 ### Requirements
 
-- WebGPU for usable speed, available in current Chrome and Edge. Without it the model runs on the CPU, which is much slower (and single-threaded unless the page is cross-origin isolated).
+- WebGPU for usable speed: current Chrome, Edge, and Safari. Safari runs wllama's compatibility build (16 MB, also from jsDelivr), because Safari 27 cannot compile the default build's 64-bit memory ([ngxson/wllama#297](https://github.com/ngxson/wllama/issues/297)). Without WebGPU the model runs on the CPU, which is much slower (and single-threaded unless the page is cross-origin isolated).
+- Firefox runs the model on the CPU: its WebGPU waits about 100 ms for each GPU synchronization ([Mozilla bug 1870699](https://bugzilla.mozilla.org/show_bug.cgi?id=1870699)), which makes it far slower than the CPU ([ngxson/wllama#296](https://github.com/ngxson/wllama/issues/296)). On the CPU, wllama uses several threads only on cross-origin isolated pages (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, as on duckdb-terminal.com). Even then the first answer takes a few minutes in Firefox, mostly reading the prompt; follow-up questions reuse it.
 - The Origin Private File System for the model cache. Some private browsing modes do not provide it.
 - Network access to `cdn.jsdelivr.net`, where wllama is loaded from on first use (pinned to the version the library was built with), and to `huggingface.co` and its download CDN (`*.hf.co`). Pages with a Content Security Policy must allow these origins and `blob:` workers.
 - Disk space for the cached models and enough GPU memory for the selected model.

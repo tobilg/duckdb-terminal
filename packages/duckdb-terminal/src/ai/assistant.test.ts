@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   createWllamaMock,
   contentChunk,
@@ -23,7 +23,9 @@ const PIVOT_DOCS: DocsChunk[] = [{
   text: 'PIVOT table ON column USING sum(value);',
 }];
 
-function setup(options: { gpu?: boolean; schema?: string } = {}) {
+const COMPAT_URLS = { worker: 'https://cdn.test/compat/wllama.js', wasm: 'https://cdn.test/compat/wllama.wasm' };
+
+function setup(options: { gpu?: boolean; compat?: boolean; schema?: string } = {}) {
   const wllama = createWllamaMock();
   const writes: string[] = [];
   const store = new Map<string, string>();
@@ -42,6 +44,8 @@ function setup(options: { gpu?: boolean; schema?: string } = {}) {
     wasmUrl: 'https://cdn.test/wllama.wasm',
     storage,
     hasWebGPU: () => options.gpu ?? true,
+    needsCompatBuild: () => options.compat ?? false,
+    compatUrls: COMPAT_URLS,
     searchDocs,
   });
   const output = () => writes.join('').replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
@@ -85,6 +89,36 @@ describe('AIAssistant model management', () => {
     const context = setup();
     context.wllama.state.constructorError = new Error('No supported storage backend found');
     await expect(context.create().getModelStatuses()).rejects.toThrow(/cannot cache models/);
+  });
+
+  describe('GPU or CPU by browser', () => {
+    const FIREFOX = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:159.0) Gecko/20100101 Firefox/159.0';
+    const CHROME = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/160.0.0.0 Safari/537.36';
+    const browser = (navigator: object) => {
+      vi.stubGlobal('navigator', navigator);
+      const context = setup();
+      return new AIAssistant(context.host, { loadWllama: async () => context.wllama.module, storage: null });
+    };
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('uses WebGPU where the browser has it', () => {
+      const assistant = browser({ userAgent: CHROME, gpu: {} });
+      expect(assistant.hasWebGPU()).toBe(true);
+      expect(assistant.cpuReason()).toBeNull();
+    });
+
+    it('runs on the CPU in Firefox, whose WebGPU is too slow', () => {
+      const assistant = browser({ userAgent: FIREFOX, gpu: {} });
+      expect(assistant.hasWebGPU()).toBe(false);
+      expect(assistant.cpuReason()).toBe("Firefox's WebGPU is too slow for these models");
+    });
+
+    it('runs on the CPU without WebGPU', () => {
+      const assistant = browser({ userAgent: CHROME });
+      expect(assistant.hasWebGPU()).toBe(false);
+      expect(assistant.cpuReason()).toBe('WebGPU is not available in this browser');
+    });
   });
 
   it('persists the selected model and restores it', () => {
@@ -142,6 +176,29 @@ describe('AIAssistant.ask', () => {
     expect(request[1].content).toContain('CREATE TABLE t (id INTEGER);');
     expect(context.wllama.state.requestOptions[0]).toMatchObject({ stream: true, tool_choice: 'auto' });
     expect(context.output()).toContain('Thinking\r\nThe user greets me.\r\n\r\nHello!\r\n(7 tokens · 10.0 tok/s)');
+  });
+
+  it('loads the default build where the browser can run it', async () => {
+    const assistant = ready(context);
+    context.wllama.state.scripts.push([contentChunk('ok'), finishChunk('stop')]);
+
+    await assistant.ask('hi', signal());
+
+    expect(context.wllama.state.workerResources).toEqual([{ wasmPath: 'https://cdn.test/wllama.wasm', compat: false }]);
+  });
+
+  it('loads the compat build where the default build cannot run (Safari 27)', async () => {
+    context = setup({ compat: true });
+    const assistant = ready(context);
+    context.wllama.state.scripts.push([contentChunk('ok'), finishChunk('stop')]);
+
+    await assistant.ask('hi', signal());
+
+    expect(context.wllama.state.workerResources).toEqual([
+      { wasmPath: COMPAT_URLS.wasm, jsPath: COMPAT_URLS.worker, compat: true },
+    ]);
+    expect(context.wllama.state.loads[0].params).toMatchObject({ n_gpu_layers: 99_999 });
+    expect(context.output()).toContain('ok');
   });
 
   it('runs on the CPU without WebGPU', async () => {
