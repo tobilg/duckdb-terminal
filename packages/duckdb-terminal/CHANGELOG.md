@@ -2,6 +2,10 @@
 
 All notable changes to `duckdb-terminal` are documented here.
 
+## 0.8.3 (2026-11-05)
+
+- **Progress and status lines stay in one row on narrow terminals,** such as phones: the model download progress, the AI assistant's status (loading the model, reading the prompt), and the "Running…" indicator of long queries. Before, a line longer than the terminal wrapped, and each update left a copy of its first row behind. They now use a shorter form, or end in "…", when the terminal is too narrow.
+
 ## 0.8.2 (2026-11-05)
 
 - **`.clearmodels`** removes the downloaded AI models from the browser. It lists them with their sizes, including interrupted downloads, and asks before removing. It unloads a loaded model and forgets the selected one; other files in wllama's cache stay.
