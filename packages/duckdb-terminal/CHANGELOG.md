@@ -2,6 +2,11 @@
 
 All notable changes to `duckdb-terminal` are documented here.
 
+## 0.8.4 (2026-11-06)
+
+- **The AI assistant is not offered on iPhone and iPad.** Loading a model crashed the Safari tab on an iPhone 17 Pro: every browser on iOS uses WebKit, which gives a tab too little memory, and loading even the smallest model briefly takes about 3 GB there. `.model` and `.ai` now explain this instead of loading a model and losing the tab. `.clearmodels` still removes models downloaded earlier.
+- **Safari loads models with one thread.** On cross-origin isolated pages wllama ran several threads with a shared WebAssembly memory reserved up to 4 GB; in WebKit they did not make the compat build faster, and one run with them aborted.
+
 ## 0.8.3 (2026-11-05)
 
 - **Progress and status lines stay in one row on narrow terminals,** such as phones: the model download progress, the AI assistant's status (loading the model, reading the prompt), and the "Running…" indicator of long queries. Before, a line longer than the terminal wrapped, and each update left a copy of its first row behind. They now use a shorter form, or end in "…", when the terminal is too narrow.
