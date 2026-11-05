@@ -2,7 +2,7 @@
 
 All notable changes to `duckdb-terminal` are documented here.
 
-## 0.8.1 (unreleased)
+## 0.8.1 (2026-11-05)
 
 - **The AI assistant works in Safari.** Safari 27 passes wllama's own check for its default build but cannot compile it (64-bit WebAssembly memory), so loading a model never finished ([ngxson/wllama#297](https://github.com/ngxson/wllama/issues/297)). Safari now runs wllama's compatibility build (16 MB, from jsDelivr like wllama), on WebGPU at about the same speed.
 - **Firefox runs models on the CPU:** its WebGPU waits about 100 ms for each GPU synchronization ([Mozilla bug 1870699](https://bugzilla.mozilla.org/show_bug.cgi?id=1870699)), so generation ran at about 0.5 tokens/s ([ngxson/wllama#296](https://github.com/ngxson/wllama/issues/296)). On the CPU, wllama uses several threads on cross-origin isolated pages: 12 tokens/s in our test, though the first answer still takes a few minutes. `.model` says when models run on the CPU and why, and when they get only one thread.
