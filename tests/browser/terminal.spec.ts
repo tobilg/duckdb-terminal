@@ -4,6 +4,7 @@ import type {} from './harness';
 
 const duckdbDist = resolve('packages/duckdb-terminal/node_modules/@duckdb/duckdb-wasm/dist');
 const uplotDist = resolve('packages/duckdb-terminal/node_modules/uplot/dist');
+const wllamaEsm = resolve('packages/duckdb-terminal/node_modules/@wllama/wllama/esm');
 
 test.beforeEach(async ({ context }) => {
   // Use the actual installed DuckDB assets, avoiding a CDN dependency in browser CI.
@@ -16,6 +17,12 @@ test.beforeEach(async ({ context }) => {
     const name = new URL(route.request().url()).pathname.split('/').at(-1)!;
     return route.fulfill({ path: resolve(uplotDist, name), contentType: name.endsWith('.css') ? 'text/css' : 'text/javascript' });
   });
+  // Serve the pinned wllama devDependency and never download models in tests.
+  await context.route(/https:\/\/cdn\.jsdelivr\.net\/npm\/@wllama\/wllama@[^/]+\/esm\//, (route) => {
+    const file = new URL(route.request().url()).pathname.replace(/^.*\/esm\//, '');
+    return route.fulfill({ path: resolve(wllamaEsm, file), contentType: file.endsWith('.wasm') ? 'application/wasm' : 'text/javascript', headers: { 'Access-Control-Allow-Origin': '*' } });
+  });
+  await context.route(/https:\/\/huggingface\.co\//, (route) => route.fulfill({ status: 404, body: 'Model downloads disabled in integration fixture' }));
   await context.addInitScript(() => {
     window.workerStatus = [];
     const OriginalWorker = window.Worker;
@@ -198,4 +205,41 @@ test('chart overlay and sharing survive the renderer replacement', async ({ page
   await expect(page.locator('body')).toContainText('Share');
   await page.keyboard.press('Escape');
   expect(await page.evaluate(() => window.fixture.errors)).toEqual([]);
+});
+
+test('bundled DuckDB docs load below a base path and answer searches', async ({ page }) => {
+  await openFixture(page);
+  const docsResponse = page.waitForResponse((response) => /duckdb-docs[^/]*\.json$/.test(response.url()));
+  const results = await page.evaluate(() => {
+    const terminal = window.fixture.terminal as unknown as {
+      getAssistant(): { searchDocs(query: string): Promise<Array<{ path: string; url: string }>> };
+    };
+    return terminal.getAssistant().searchDocs('PIVOT');
+  });
+  const response = await docsResponse;
+  expect(response.status()).toBe(200);
+  expect(new URL(response.url()).pathname).toMatch(/^\/nested\//);
+  expect(results[0].url).toMatch(/^https:\/\/duckdb\.org\/docs\/[^/]+\/sql\/statements\/pivot/);
+});
+
+test('local AI model picker loads wllama and asks before downloading', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'The model cache needs OPFS, which WebKit test contexts lack.');
+  await openFixture(page);
+  const input = page.locator('.gespenst__input');
+  await input.focus();
+  await input.pressSequentially('.model');
+  await input.press('Enter');
+  await expect.poll(() => text(page)).toContain('Select a model (1-4):');
+  const listing = await text(page);
+  expect(listing).toMatch(/1\. Qwen3\.5 0\.8B \(Q4_0\)\s+537 MiB/);
+  expect(listing).not.toContain('Could not check installed models');
+
+  await input.pressSequentially('1');
+  await input.press('Enter');
+  await expect.poll(() => text(page)).toContain('(size 537 MiB) in your browser (yes/no)');
+  await input.pressSequentially('no');
+  await input.press('Enter');
+  await expect.poll(() => text(page)).toContain('Installation cancelled.');
+  await expect.poll(() => page.evaluate(() => window.fixture.terminal.runCommand('.ai').then(() => 'idle', String))).toBe('idle');
+  expect(await text(page)).toContain('No model selected yet: run .model');
 });

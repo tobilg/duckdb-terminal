@@ -25,12 +25,15 @@ function findPackageJson(packageName: string): Record<string, unknown> {
 // Read versions from package.json files
 const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
 const uplotPkg = findPackageJson('uplot');
+// wllama is loaded from jsDelivr at runtime; pin the CDN URL to the tested devDependency.
+const wllamaPkg = findPackageJson('@wllama/wllama');
 
 export default defineConfig({
   base: './',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __UPLOT_VERSION__: JSON.stringify(uplotPkg.version),
+    __WLLAMA_VERSION__: JSON.stringify(wllamaPkg.version),
   },
   build: {
     lib: {
@@ -54,7 +57,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
-    include: ['src/**/*.{test,spec}.{js,ts}'],
+    include: ['src/**/*.{test,spec}.{js,ts}', 'scripts/**/*.test.mjs'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

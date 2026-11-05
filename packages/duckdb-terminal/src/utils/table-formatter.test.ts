@@ -10,6 +10,7 @@ import {
   formatTSVRow,
   formatJSON,
   formatJSONLines,
+  toDisplayValue,
 } from './table-formatter';
 
 describe('formatTable', () => {
@@ -239,5 +240,82 @@ describe('formatJSON', () => {
     const parsed = JSON.parse(result);
 
     expect(parsed[0].values).toEqual([1, 2, 3]);
+  });
+});
+
+// Values and type names as DuckDB-WASM returns them through Arrow.
+describe('toDisplayValue', () => {
+  it.each([
+    [1735672255000, 'Timestamp<MICROSECOND>', '2024-12-31 19:10:55'],
+    [1735672255123.456, 'Timestamp<MICROSECOND>', '2024-12-31 19:10:55.123456'],
+    [1735672255500, 'Timestamp<MILLISECOND>', '2024-12-31 19:10:55.5'],
+    [-500, 'Timestamp<MICROSECOND>', '1969-12-31 23:59:59.5'],
+    [1735672255000, 'Timestamp<MICROSECOND, UTC>', '2024-12-31 19:10:55+00'],
+    [1735603200000, 'Date32<DAY>', '2024-12-31'],
+    [-14256000000, 'Date32<DAY>', '1969-07-20'],
+    [1735603200000, 'Date64<MILLISECOND>', '2024-12-31'],
+    [69055000000n, 'Time64<MICROSECOND>', '19:10:55'],
+    [69055123456n, 'Time64<MICROSECOND>', '19:10:55.123456'],
+    [69055500, 'Time32<MILLISECOND>', '19:10:55.5'],
+  ])('formats %s of type %s as %s', (value, type, expected) => {
+    expect(toDisplayValue(value, type)).toBe(expected);
+  });
+
+  it('leaves other values unchanged', () => {
+    expect(toDisplayValue(42, 'Int32')).toBe(42);
+    expect(toDisplayValue(42n, 'Int64')).toBe(42n);
+    expect(toDisplayValue('2024-12-31', 'Utf8')).toBe('2024-12-31');
+    expect(toDisplayValue(null, 'Timestamp<MICROSECOND>')).toBeNull();
+    expect(toDisplayValue(1735672255000, undefined)).toBe(1735672255000);
+    expect(toDisplayValue(Number.POSITIVE_INFINITY, 'Timestamp<MICROSECOND>')).toBe(Number.POSITIVE_INFINITY);
+    expect(toDisplayValue(1e20, 'Date32<DAY>')).toBe(1e20);
+  });
+});
+
+describe('temporal columns', () => {
+  const columns = ['ts', 'd', 'tz', 't'];
+  const columnTypes = ['Timestamp<MICROSECOND>', 'Date32<DAY>', 'Timestamp<MICROSECOND, UTC>', 'Time64<MICROSECOND>'];
+  const rows = [[1735672255000, 1735603200000, 1735672255000, 69055000000n]];
+
+  it('shows dates and times and DuckDB type names in tables', () => {
+    const table = formatTable(columns, rows, { columnTypes, showTypes: true });
+    expect(table).toContain('2024-12-31 19:10:55');
+    expect(table).toContain('2024-12-31 19:10:55+00');
+    expect(table).toContain('19:10:55');
+    expect(table).not.toContain('1735672255000');
+    expect(table).toMatch(/│\s+timestamp\s+│\s+date\s+│\s+timestamptz\s+│\s+time\s+│/);
+  });
+
+  it('writes dates and times in CSV, TSV, and JSON', () => {
+    expect(formatCSV(columns, rows, columnTypes)).toBe('ts,d,tz,t\n2024-12-31 19:10:55,2024-12-31,2024-12-31 19:10:55+00,19:10:55');
+    expect(formatTSV(columns, rows, columnTypes).split('\n')[1]).toBe('2024-12-31 19:10:55\t2024-12-31\t2024-12-31 19:10:55+00\t19:10:55');
+    expect(JSON.parse(formatJSON(columns, rows, columnTypes))).toEqual([
+      { ts: '2024-12-31 19:10:55', d: '2024-12-31', tz: '2024-12-31 19:10:55+00', t: '19:10:55' },
+    ]);
+  });
+
+  it('keeps the old output without column types', () => {
+    expect(formatCSV(['ts'], [[1735672255000]])).toBe('ts\n1735672255000');
+  });
+});
+
+describe('HUGEINT values (Arrow big numbers)', () => {
+  /** Like Arrow's BigNum: a typed array whose toJSON() quotes the number. */
+  const bigNum = (digits: string) => Object.assign(new Uint32Array(4), {
+    toJSON: () => `"${digits}"`,
+    toString: () => digits,
+    [Symbol.toPrimitive]: (hint: string) => (hint === 'number' ? Number(digits) : digits),
+  });
+
+  it('shows the digits in tables, CSV, and TSV', () => {
+    expect(formatCSV(['total'], [[bigNum('9192')]])).toBe('total\n9192');
+    expect(formatTSV(['total'], [[bigNum('9192')]])).toBe('total\n9192');
+    expect(formatTable(['total'], [[bigNum('9192')]])).toContain('│ 9192  │');
+    expect(formatTable(['total'], [[bigNum('9192')]])).not.toContain('"');
+  });
+
+  it('writes numbers to JSON, and strings beyond the safe integer range', () => {
+    expect(JSON.parse(formatJSON(['total'], [[bigNum('9192')]]))).toEqual([{ total: 9192 }]);
+    expect(JSON.parse(formatJSON(['total'], [[bigNum('123456789012345678901234567890')]]))).toEqual([{ total: '123456789012345678901234567890' }]);
   });
 });

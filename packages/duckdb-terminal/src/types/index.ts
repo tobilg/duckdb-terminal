@@ -18,7 +18,7 @@ import type { DuckDBBundles } from '@duckdb/duckdb-wasm';
  *   fontSize: 16,
  *   theme: 'dark',
  *   storage: 'opfs',
- *   databasePath: '/mydata.duckdb',
+ *   databasePath: 'opfs://mydata.duckdb',
  *   maximumThreads: 1,
  *   welcomeMessage: true,
  *   prompt: 'SQL> ',
@@ -58,8 +58,9 @@ export interface TerminalConfig {
    */
   storage?: 'memory' | 'opfs';
   /**
-   * The database file path when using OPFS storage.
-   * Only used when storage is 'opfs'.
+   * The database file path when using OPFS storage, with the `opfs://`
+   * prefix (for example `'opfs://mydata.duckdb'`); a path without it is
+   * not persisted. Only used when storage is 'opfs'.
    */
   databasePath?: string;
   /**

@@ -8,6 +8,9 @@ The latest version is always deployed to [https://duckdb-terminal.com](https://d
 ## API Docs
 The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-terminal](https://tobilg.github.io/duckdb-terminal/).
 
+## Changelog
+See [packages/duckdb-terminal/CHANGELOG.md](packages/duckdb-terminal/CHANGELOG.md).
+
 ## Features
 
 - **Full SQL REPL** - Execute SQL queries with multi-line support
@@ -26,7 +29,7 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 - **Persistent Storage** - Optional OPFS storage for data persistence
 - **Interactive Charts** - Visualize query results with auto-detected chart types (line, bar, scatter, histogram)
 - **Query Sharing** - Share SQL queries via URL for collaboration
-- **AI-Powered SQL** - Generate SQL from natural language using a text-to-sql proxy
+- **Local AI Assistant** - Ask questions about your data with a small language model that runs in your browser (WebGPU) and can run SQL itself
 
 ## Architecture
 
@@ -81,8 +84,10 @@ The TypeScript API Docs can be found at [https://tobilg.github.io/duckdb-termina
 ## Installation
 
 ```bash
-npm install duckdb-terminal @gespenst/core@0.1.2
+npm install duckdb-terminal @duckdb/duckdb-wasm@1.33.1-dev113.0 @gespenst/core@0.2.0
 ```
+
+Both peer dependencies are pinned to exact versions. See the [changelog](packages/duckdb-terminal/CHANGELOG.md) for what changed in each release, including the breaking changes in 0.8.0.
 
 ## Quick Start
 
@@ -131,7 +136,7 @@ interface TerminalConfig {
   // Storage: 'memory' | 'opfs' (default: 'memory')
   storage?: 'memory' | 'opfs';
 
-  // Database path for OPFS storage
+  // Database path for OPFS storage, such as 'opfs://mydata.duckdb' (without opfs:// nothing is persisted)
   databasePath?: string;
 
   // Maximum DuckDB execution threads (default: 1)
@@ -220,12 +225,7 @@ This repository's hosted demo intentionally uses the default single-threaded bun
 
 | Command | Description |
 |---------|-------------|
-| `.ai <question>` | Generate SQL from natural language (shorthand) |
-| `.ai query <question>` | Generate SQL from natural language |
-| `.ai provider list` | List available AI providers |
-| `.ai provider set <name>` | Set the AI provider |
-| `.ai endpoint get` | Show current proxy endpoint |
-| `.ai endpoint set <url>` | Set proxy endpoint URL |
+| `.ai <prompt>` | Ask the selected local AI model about your data |
 | `.chart [options]` | Show interactive chart of last query result |
 | `.clear` | Clear the terminal |
 | `.clearhistory` | Clear command history |
@@ -237,6 +237,7 @@ This repository's hosted demo intentionally uses the default single-threaded bun
 | `.highlight on\|off` | Toggle syntax highlighting |
 | `.links on\|off` | Toggle clickable URL detection |
 | `.mode table\|csv\|tsv\|json` | Set output format |
+| `.model [1-4]` | Choose, download, and select a local AI model |
 | `.open` | Open file picker to load data files |
 | `.pagesize <n>` | Set result page size (0 resets to the safe maximum) |
 | `.prompt [primary [cont]]` | Get or set the command prompt |
@@ -383,87 +384,66 @@ https://duckdb-terminal.com/#$queries=v1,ENCODED_QUERY_1,ENCODED_QUERY_2,...
 | `Enter` | Copy shareable link |
 | `Escape` | Close modal |
 
-## AI-Powered SQL Generation
+## Local AI Assistant
 
-Generate SQL queries from natural language using a text-to-sql proxy. This feature requires running the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy) locally or on a server.
+Ask questions about your data in plain language. A small language model runs entirely in your browser with [wllama](https://github.com/ngxson/wllama) (llama.cpp compiled to WebAssembly, accelerated with WebGPU): there is no server and no API key, and your data never leaves the page. The setup follows the [duckdb-wasm-shell-wllama](https://github.com/thomas-0816/duckdb-wasm-shell-wllama) demo.
 
-### Running the Text-to-SQL Proxy
+### Choosing a model
 
-Download precompiled binaries from the [releases page](https://github.com/tobilg/text-to-sql-proxy/releases) for your platform (Linux, macOS, Windows).
+Run `.model` to list the models, pick one, and confirm the download:
 
-**Quick start:**
+```
+🦆 .model
+Local AI models (run in your browser with wllama)
+  1. Qwen3.5 0.8B (Q4_0)    537 MiB
+  2. MiniCPM5 1B (Q4_K_M)   656 MiB
+  3. Qwen3.5 2B (Q4_K_XL)  1278 MiB
+  4. Qwen3.5 4B (Q4_K_XL)  2777 MiB
 
-```bash
-# Download and extract the binary for your platform, then run:
-./text-to-sql-proxy
-
-# Or with a specific provider API key:
-ANTHROPIC_API_KEY=your-key ./text-to-sql-proxy
-OPENAI_API_KEY=your-key ./text-to-sql-proxy
+Select a model (1-4): 1
+Do you want to install the selected model (size 537 MiB) in your browser (yes/no) yes
+Installed Qwen3.5 0.8B (Q4_0). Ask it with .ai <prompt>
 ```
 
-The proxy starts on `http://localhost:4000` by default. See the [proxy documentation](https://github.com/tobilg/text-to-sql-proxy#running-the-proxy) for more configuration options.
+Each model is downloaded once from the Hugging Face Hub and cached in the browser's Origin Private File System. Picking a model that is already installed switches to it without asking. `.model 2` skips the menu, and Ctrl+C cancels a download.
 
-### Setup
+| # | Model | Hugging Face repository | Size |
+|---|-------|-------------------------|------|
+| 1 | Qwen3.5 0.8B (Q4_0) | [ggml-org/Qwen3.5-0.8B-GGUF](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF) | 537 MiB |
+| 2 | MiniCPM5 1B (Q4_K_M) | [openbmb/MiniCPM5-1B-GGUF](https://huggingface.co/openbmb/MiniCPM5-1B-GGUF) | 656 MiB |
+| 3 | Qwen3.5 2B (Q4_K_XL) | [unsloth/Qwen3.5-2B-GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF) | 1278 MiB |
+| 4 | Qwen3.5 4B (Q4_K_XL) | [unsloth/Qwen3.5-4B-GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) | 2777 MiB |
 
-1. Download and run the [Text-to-SQL Proxy](https://github.com/tobilg/text-to-sql-proxy/releases)
-2. The proxy runs on `http://localhost:4000` by default
-3. Create tables in your database (the AI needs schema context)
+All four models are Apache-2.0 licensed. Larger models give better answers but need more GPU memory, so start with the smallest.
 
-### Basic Usage
+### Asking questions
 
 ```sql
--- Create some tables first
-CREATE TABLE users (id INTEGER, name VARCHAR, email VARCHAR);
-CREATE TABLE orders (id INTEGER, user_id INTEGER, total DECIMAL, created_at DATE);
-
--- Generate SQL from natural language
-.ai show all users
-
--- Or use the explicit query subcommand
-.ai query find orders over 100 dollars from last month
+CREATE TABLE orders AS SELECT * FROM 'orders.csv';
+.ai Which customer spent the most in total?
 ```
 
-The generated SQL is displayed with syntax highlighting and then executed automatically.
+The terminal streams the model's reasoning (dimmed, under "Thinking") and then its answer. To answer, the model has two tools:
 
-### AI Commands
+- `query` runs SQL. Each statement and its result appear in the terminal like a query you typed; the statement is added to the command history, and the result becomes the last result for `.copy`, `.download`, and `.chart`.
+- `search_docs` searches the DuckDB documentation that ships with the library. The terminal lists the sections the model reads, with their duckdb.org links, so you can check its sources.
 
-| Command | Description |
-|---------|-------------|
-| `.ai <question>` | Generate SQL from natural language (shorthand) |
-| `.ai query <question>` | Generate SQL from natural language |
-| `.ai provider list` | List available AI providers from the proxy |
-| `.ai provider set <name>` | Set the AI provider (e.g., `claude`, `openai`) |
-| `.ai endpoint get` | Show current proxy endpoint URL |
-| `.ai endpoint set <url>` | Change the proxy endpoint URL |
+- The model's statements run without asking, including ones that change data or schema (`CREATE`, `DELETE`, `DROP`, `COPY ... TO`). Keep a copy of data you cannot recreate, especially in a persistent (OPFS) database.
+- The current schema is sent with every prompt, and the model sees at most 50 rows of each result.
+- Questions can name files on the web (`https://…/data.parquet`, `.csv`, `.json`); the terminal describes their columns to the model like loaded tables. For a DuckDB database URL (`.duckdb`, `.ddb`, `.db`), the model runs `ATTACH … (READ_ONLY)` itself and then queries its tables. The server must allow CORS (and range requests, for Parquet and database files).
+- Follow-up prompts continue the conversation. Switching models or running `.reset` starts a new one.
+- Ctrl+C stops the model.
 
-### Configuration
+### Bundled documentation
 
-Settings are persisted in localStorage:
-
-- **Endpoint**: Default is `http://localhost:4000`
-- **Provider**: Default is `claude`
-
-```sql
--- Check current endpoint
-.ai endpoint get
-
--- Change to a different proxy
-.ai endpoint set http://my-proxy:8000
-
--- List available providers
-.ai provider list
-
--- Switch provider
-.ai provider set openai
-```
+`search_docs` searches `dist/duckdb-docs.json` (about 1.9 MB, 470 KB gzipped), which is fetched from your page's origin the first time the model searches. It holds about 2,100 sections of the DuckDB documentation, generated from DuckDB's [single-file Markdown export](https://blobs.duckdb.org/docs/duckdb-docs.md) by `pnpm run build:docs`: other client APIs, contributor docs, and the spatial extension are left out, and markup the model does not need is removed. Regenerate it when the bundled DuckDB-Wasm moves to a new DuckDB release. The search uses BM25 over lightly stemmed words (a search for "truncation" finds `date_trunc`), with snake_case names also matched by their parts. The documentation is MIT licensed; see `THIRD_PARTY_NOTICES.md`.
 
 ### Requirements
 
-- Tables or views must exist in the database for the AI to generate meaningful SQL
-- The text-to-sql proxy must be running and accessible
-- If no tables exist, you'll see: `"Please create tables or views to be able to use the Text-to-SQL features"`
-- If the proxy is unavailable, you'll see: `"Please install and run the Text-to-SQL Proxy"`
+- WebGPU for usable speed, available in current Chrome and Edge. Without it the model runs on the CPU, which is much slower (and single-threaded unless the page is cross-origin isolated).
+- The Origin Private File System for the model cache. Some private browsing modes do not provide it.
+- Network access to `cdn.jsdelivr.net`, where wllama is loaded from on first use (pinned to the version the library was built with), and to `huggingface.co` and its download CDN (`*.hf.co`). Pages with a Content Security Policy must allow these origins and `blob:` workers.
+- Disk space for the cached models and enough GPU memory for the selected model.
 
 ## Keyboard Shortcuts
 
@@ -831,7 +811,7 @@ const suggestions = await db.getCompletions('SEL', 3);
 ## Migrating to Gespenst
 
 - Use ESM imports; UMD and CommonJS builds have been removed.
-- Install the exact `@gespenst/core@0.1.2` peer and import `duckdb-terminal/style.css`.
+- Install the exact `@gespenst/core@0.2.0` peer and import `duckdb-terminal/style.css`.
 - Replace `scrollback` (bytes) with `scrollbackLines` (lines). The default is 10,000 lines; zero disables scrollback. The removed byte option throws an explanatory error rather than silently changing units.
 - Await `terminal.setTheme(theme)` and `terminal.destroy()`. Theme changes preserve output, input, and the database; destruction cancels active work and closes rendering and database resources.
 - Use `terminal.focus()` and `await terminal.runCommand('.help')` for host controls. `runCommand` accepts one dot command, preserves pending input, and rejects while the REPL is busy or collecting multiline SQL. Invoke file commands directly inside a user click handler, before any unrelated `await`.
@@ -875,7 +855,7 @@ pnpm exec playwright install chromium firefox webkit
 pnpm run test:browser
 ```
 
-The suite builds the library, website, and a separate consumer served under `/nested/`. It verifies the real Gespenst worker, rendered SQL, editing, themes, links, and cleanup in Chromium, Firefox, and WebKit, with additional Chromium checks for pagination, cancellation, and mobile controls. It serves the installed DuckDB assets through test routes and disables optional remote extensions for deterministic startup; this does not change production extension loading. Physical iOS/Android virtual keyboards still need device testing.
+The suite builds the library, website, and a separate consumer served under `/nested/`. It verifies the real Gespenst worker, rendered SQL, editing, themes, links, and cleanup in Chromium, Firefox, and WebKit, with additional Chromium checks for pagination, cancellation, and mobile controls. It serves the installed DuckDB, uPlot, and wllama assets through test routes, blocks model downloads, and disables optional remote extensions for deterministic startup; this does not change production extension loading. Physical iOS/Android virtual keyboards still need device testing.
 
 ## Bundle Outputs
 
@@ -884,6 +864,7 @@ The suite builds the library, website, and a separate consumer served under `/ne
 | `dist/duckdb-terminal.js` | ESM | Modern bundlers |
 | `dist/duckdb-terminal.css` | CSS | Import `duckdb-terminal/style.css` |
 | `dist/ghostty-*.wasm` | WASM | Version-matched Gespenst runtime assets |
+| `dist/duckdb-docs.json` | JSON | DuckDB documentation for the AI assistant, fetched on first use |
 | `dist/*.d.ts` | TypeScript | Type definitions |
 
 ## Dependencies
@@ -891,10 +872,12 @@ The suite builds the library, website, and a separate consumer served under `/ne
 - [@duckdb/duckdb-wasm](https://www.npmjs.com/package/@duckdb/duckdb-wasm) - DuckDB WebAssembly build
 - [@gespenst/core](https://www.npmjs.com/package/@gespenst/core) - Browser terminal with worker rendering
 - [@gespenst/web-links](https://www.npmjs.com/package/@gespenst/web-links) - HTTP(S) link detection
+- [@wllama/wllama](https://www.npmjs.com/package/@wllama/wllama) - In-browser LLM inference for `.ai` (loaded from jsDelivr on first use)
+- [uPlot](https://github.com/leeoniya/uPlot) - Charts for `.chart` (loaded from jsDelivr on first use)
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).
 
 ## Credits
 

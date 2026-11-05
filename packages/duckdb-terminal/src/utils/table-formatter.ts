@@ -161,7 +161,12 @@ function isInterval(value: unknown): value is { months?: number; days?: number; 
  * - Map: converts to object
  * - Uint8Array (BLOB): converts to hex string
  */
-function jsonSafeReplacer(_key: string, value: unknown): unknown {
+function jsonSafeReplacer(this: unknown, key: string, value: unknown): unknown {
+  // JSON.stringify applies toJSON() first, which quotes Arrow's big numbers: use the original value.
+  const original = (this as Record<string, unknown> | null)?.[key];
+  if (isArrowBigNum(original)) {
+    return bigIntToSafe(BigInt(original.toString()));
+  }
   if (typeof value === 'bigint') {
     return bigIntToSafe(value);
   }
@@ -178,8 +183,18 @@ function jsonSafeReplacer(_key: string, value: unknown): unknown {
 }
 
 /**
+ * Whether a value is one of Arrow's big numbers, which DuckDB-Wasm returns for
+ * HUGEINT and UHUGEINT (such as the sum of an integer column). They are typed
+ * arrays whose toJSON() returns the number in quotes; toString() returns its digits.
+ */
+function isArrowBigNum(value: unknown): value is ArrayBufferView & { toString(): string } {
+  return ArrayBuffer.isView(value) && typeof (value as { [Symbol.toPrimitive]?: unknown })[Symbol.toPrimitive] === 'function';
+}
+
+/**
  * Format a value for display.
  * Handles special DuckDB types:
+ * - HUGEINT/UHUGEINT (Arrow big numbers): their digits
  * - BigInt: converts to Number when safe, string otherwise
  * - Date: converts to ISO string
  * - Map: converts to {key: value, ...} format
@@ -189,6 +204,9 @@ function jsonSafeReplacer(_key: string, value: unknown): unknown {
 function formatValue(value: unknown, nullValue: string): string {
   if (value === null || value === undefined) {
     return nullValue;
+  }
+  if (isArrowBigNum(value)) {
+    return value.toString();
   }
   if (typeof value === 'string') {
     return value;
@@ -223,10 +241,81 @@ function formatValue(value: unknown, nullValue: string): string {
   return String(value);
 }
 
+const ARROW_TEMPORAL_TYPE = /^(Timestamp|Date32|Date64|Time32|Time64)<([A-Z]+)(?:,\s*([^>]+))?>$/i;
+const MICROS_PER_UNIT: Record<string, number> = { SECOND: 1e6, MILLISECOND: 1e3, MICROSECOND: 1, NANOSECOND: 1e-3 };
+const TIMESTAMP_TYPE_NAMES: Record<string, string> = {
+  SECOND: 'timestamp_s', MILLISECOND: 'timestamp_ms', MICROSECOND: 'timestamp', NANOSECOND: 'timestamp_ns',
+};
+
+/** ".123456" for the microseconds of a second, without trailing zeros; "" for none. */
+function fractionOfSecond(micros: number): string {
+  return micros > 0 ? '.' + String(micros).padStart(6, '0').replace(/0+$/, '') : '';
+}
+
+/** "YYYY-MM-DD HH:MM:SS[.ffffff]" for microseconds since the epoch (UTC), or null when out of range. */
+function formatEpochMicros(totalMicros: number): string | null {
+  const seconds = Math.floor(totalMicros / 1e6);
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  const iso = date.toISOString();
+  const separator = iso.indexOf('T');
+  return `${iso.slice(0, separator)} ${iso.slice(separator + 1, separator + 9)}${fractionOfSecond(totalMicros - seconds * 1e6)}`;
+}
+
+/**
+ * Arrow hands DuckDB's temporal values to JavaScript as numbers: TIMESTAMP and
+ * DATE as epoch milliseconds (fractional below a millisecond), TIME as micro-
+ * or nanoseconds since midnight. Given the column's Arrow type, this returns
+ * the value as DuckDB prints it ("2024-12-31 19:10:55", "2024-12-31",
+ * "19:10:55"); time zone aware timestamps are shown in UTC ("+00"). Other
+ * values are returned unchanged.
+ */
+export function toDisplayValue(value: unknown, type: string | undefined): unknown {
+  if (!type || (typeof value !== 'number' && typeof value !== 'bigint')) return value;
+  const match = ARROW_TEMPORAL_TYPE.exec(type.trim());
+  if (!match) return value;
+  const [, kind, unit, timeZone] = match;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  switch (kind.toLowerCase()) {
+    case 'timestamp': {
+      const text = formatEpochMicros(Math.round(number * 1000));
+      return text === null ? value : `${text}${timeZone ? '+00' : ''}`;
+    }
+    case 'date32':
+    case 'date64': {
+      const text = formatEpochMicros(Math.round(number * 1000));
+      return text === null ? value : text.slice(0, text.indexOf(' '));
+    }
+    default: {
+      const factor = MICROS_PER_UNIT[unit.toUpperCase()];
+      if (factor === undefined) return value;
+      const totalMicros = Math.round(number * factor);
+      const seconds = Math.floor(totalMicros / 1e6);
+      const clock = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+        .map((part) => String(part).padStart(2, '0'))
+        .join(':');
+      return clock + fractionOfSecond(totalMicros - seconds * 1e6);
+    }
+  }
+}
+
 function normalizeColumnType(type: string | undefined): string {
   const normalized = (type ?? '').trim();
   if (!normalized) {
     return '';
+  }
+
+  const temporal = ARROW_TEMPORAL_TYPE.exec(normalized);
+  if (temporal) {
+    const [, kind, unit, timeZone] = temporal;
+    if (/^timestamp$/i.test(kind)) {
+      return timeZone ? 'timestamptz' : TIMESTAMP_TYPE_NAMES[unit.toUpperCase()] ?? 'timestamp';
+    }
+    return /^date/i.test(kind) ? 'date' : 'time';
+  }
+  if (/^interval</i.test(normalized)) {
+    return 'interval';
   }
 
   const lower = normalized.toLowerCase();
@@ -397,7 +486,7 @@ export function* formatTableLines(
 
   // Format all values
   const formattedRows = rows.map((row) =>
-    columns.map((_, index) => formatValue(row[index], nullValue))
+    columns.map((_, index) => formatValue(toDisplayValue(row[index], columnTypes?.[index]), nullValue))
   );
 
   // Calculate column widths
@@ -450,59 +539,62 @@ export function* formatTableLines(
 }
 
 /**
- * Format query results as CSV
+ * Format query results as CSV. Pass the result's `columnTypes` so dates and
+ * times are written as text instead of Arrow's epoch numbers.
  */
-export function formatCSV(columns: string[], rows: unknown[][]): string {
-  return Array.from(formatCSVLines(columns, rows)).join('\n');
+export function formatCSV(columns: string[], rows: unknown[][], columnTypes?: string[]): string {
+  return Array.from(formatCSVLines(columns, rows, columnTypes)).join('\n');
 }
 
 export function* formatCSVLines(
   columns: string[],
-  rows: unknown[][]
+  rows: unknown[][],
+  columnTypes?: string[]
 ): IterableIterator<string> {
   if (columns.length === 0) return;
   yield formatCSVHeader(columns);
-  for (const row of rows) yield formatCSVRow(row);
+  for (const row of rows) yield formatCSVRow(row, columnTypes);
 }
 
 export function formatCSVHeader(columns: string[]): string {
-  return columns.map(escapeCSVValue).join(',');
+  return columns.map((column) => escapeCSVValue(column)).join(',');
 }
 
-export function formatCSVRow(row: unknown[]): string {
-  return row.map(escapeCSVValue).join(',');
+export function formatCSVRow(row: unknown[], columnTypes?: string[]): string {
+  return row.map((value, index) => escapeCSVValue(toDisplayValue(value, columnTypes?.[index]))).join(',');
 }
 
-export function formatCSVRows(rows: unknown[][]): string[] {
-  return rows.map(formatCSVRow);
+export function formatCSVRows(rows: unknown[][], columnTypes?: string[]): string[] {
+  return rows.map((row) => formatCSVRow(row, columnTypes));
 }
 
 /**
  * Format query results as TSV (Tab-Separated Values)
  */
-export function formatTSV(columns: string[], rows: unknown[][]): string {
-  return Array.from(formatTSVLines(columns, rows)).join('\n');
+export function formatTSV(columns: string[], rows: unknown[][], columnTypes?: string[]): string {
+  return Array.from(formatTSVLines(columns, rows, columnTypes)).join('\n');
 }
 
 export function* formatTSVLines(
   columns: string[],
-  rows: unknown[][]
+  rows: unknown[][],
+  columnTypes?: string[]
 ): IterableIterator<string> {
   if (columns.length === 0) return;
   yield formatTSVHeader(columns);
-  for (const row of rows) yield formatTSVRow(row);
+  for (const row of rows) yield formatTSVRow(row, columnTypes);
 }
 
 export function formatTSVHeader(columns: string[]): string {
-  return columns.map(escapeTSVValue).join('\t');
+  return columns.map((column) => escapeTSVValue(column)).join('\t');
 }
 
-export function formatTSVRow(row: unknown[]): string {
-  return row.map(escapeTSVValue).join('\t');
+export function formatTSVRow(row: unknown[], columnTypes?: string[]): string {
+  return row.map((value, index) => escapeTSVValue(toDisplayValue(value, columnTypes?.[index]))).join('\t');
 }
 
-export function formatTSVRows(rows: unknown[][]): string[] {
-  return rows.map(formatTSVRow);
+export function formatTSVRows(rows: unknown[][], columnTypes?: string[]): string[] {
+  return rows.map((row) => formatTSVRow(row, columnTypes));
 }
 
 function escapeCSVValue(value: unknown): string {
@@ -523,13 +615,14 @@ function escapeTSVValue(value: unknown): string {
  * Uses jsonSafeReplacer to handle BigInt values that JSON.stringify
  * cannot serialize natively.
  */
-export function formatJSON(columns: string[], rows: unknown[][]): string {
-  return Array.from(formatJSONLines(columns, rows)).join('\n');
+export function formatJSON(columns: string[], rows: unknown[][], columnTypes?: string[]): string {
+  return Array.from(formatJSONLines(columns, rows, columnTypes)).join('\n');
 }
 
 export function* formatJSONLines(
   columns: string[],
-  rows: unknown[][]
+  rows: unknown[][],
+  columnTypes?: string[]
 ): IterableIterator<string> {
   if (rows.length === 0) {
     yield '[]';
@@ -540,7 +633,7 @@ export function* formatJSONLines(
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
     const obj: Record<string, unknown> = {};
     columns.forEach((column, columnIndex) => {
-      obj[column] = rows[rowIndex][columnIndex] ?? null;
+      obj[column] = toDisplayValue(rows[rowIndex][columnIndex], columnTypes?.[columnIndex]) ?? null;
     });
     const objectLines = JSON.stringify(obj, jsonSafeReplacer, 2).split('\n');
     for (let lineIndex = 0; lineIndex < objectLines.length; lineIndex++) {

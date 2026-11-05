@@ -31,11 +31,6 @@ vi.mock('./database', () => ({
       canPaginateQuery: vi.fn().mockResolvedValue(true),
       getQueryRowCount: vi.fn().mockResolvedValue(1),
       resetSettings: vi.fn().mockResolvedValue({ resetCount: 0, restarted: false }),
-      streamQuery: vi.fn().mockResolvedValue({
-        columns: [],
-        columnTypes: [],
-        rowBatches: (async function*() {})(),
-      }),
       getTables: vi.fn().mockResolvedValue([]),
       getTableSchema: vi.fn().mockResolvedValue([]),
       getCompletions: vi.fn().mockResolvedValue([]),
@@ -102,7 +97,6 @@ function getTerminalInternals(terminal: DuckDBTerminal) {
       canPaginateQuery: ReturnType<typeof vi.fn>;
       getQueryRowCount: ReturnType<typeof vi.fn>;
       resetSettings: ReturnType<typeof vi.fn>;
-      streamQuery: ReturnType<typeof vi.fn>;
     };
     terminalAdapter: {
       writeAsync: (text: string) => Promise<void>;
@@ -736,7 +730,6 @@ describe('DuckDBTerminal Commands', () => {
 
       await terminal.executeSQL('SELECT 2 AS value;');
 
-      expect(internals.database.streamQuery).not.toHaveBeenCalled();
       expect(internals.database.executeQuery).toHaveBeenCalledTimes(2);
     });
 
@@ -1132,6 +1125,35 @@ describe('DuckDBTerminal Commands', () => {
       internals.inputBuffer.moveToStart();
       internals.handleInput('\x1b[1;3C');
       expect(internals.inputBuffer.getCursorPos()).toBe('SELECT'.length);
+    });
+
+    it('should not repaint the submitted line while a dot command is running', async () => {
+      vi.useFakeTimers();
+      try {
+        const internals = terminal as unknown as {
+          handleInput: (data: string) => void;
+          database: {
+            isPoachedLoaded: ReturnType<typeof vi.fn>;
+            tokenizeSQL: ReturnType<typeof vi.fn>;
+            getTables: ReturnType<typeof vi.fn>;
+          };
+        };
+        const tables = deferred<string[]>();
+        internals.database.isPoachedLoaded.mockReturnValue(true);
+        internals.database.getTables.mockReturnValueOnce(tables.promise);
+
+        // The trailing space schedules a highlight redraw; Enter starts the command.
+        internals.handleInput('.tables ');
+        internals.handleInput('\r');
+        await vi.advanceTimersByTimeAsync(500);
+
+        expect(internals.database.getTables).toHaveBeenCalledOnce();
+        expect(internals.database.tokenizeSQL).not.toHaveBeenCalled();
+        tables.resolve([]);
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

@@ -1,8 +1,8 @@
 {
   "name": "duckdb-terminal-monorepo",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
-  "packageManager": "pnpm@10.33.3",
+  "packageManager": "pnpm@12.15.0",
   "workspaces": [
     "packages/*"
   ],
@@ -20,11 +20,13 @@
     "typecheck": "pnpm --recursive --if-present run typecheck && tsc --project tests/tsconfig.json",
     "generate-docs": "pnpm --filter duckdb-terminal run generate-docs",
     "deploy": "pnpm run build && wrangler pages deploy packages/website/dist --project-name=terminal-sql-workbench-com",
-    "build:browser-tests": "pnpm --filter @duckdb-terminal/website exec vite build --config ../../tests/browser/vite.config.mts"
+    "build:browser-tests": "pnpm --filter @duckdb-terminal/website exec vite build --config ../../tests/browser/vite.config.mts",
+    "build:docs": "pnpm --filter duckdb-terminal run build:docs",
+    "eval:ai": "pnpm run build && pnpm run build:browser-tests && node tests/ai-eval/run.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.1",
     "typescript": "^6.0.3",
-    "wrangler": "^4.131.2"
+    "wrangler": "^4.156.2"
   }
 }

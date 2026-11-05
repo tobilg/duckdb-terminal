@@ -120,12 +120,34 @@ export class TerminalAdapter {
       event.preventDefault();
       event.stopPropagation();
     };
+    let pressed: HTMLAnchorElement | null = null;
     const handler = (event: PointerEvent) => {
-      const link = (event.target as Element).closest('a.gespenst__link');
+      const link = (event.target as Element).closest<HTMLAnchorElement>('a.gespenst__link');
+      const pressedLink = pressed;
+      pressed = event.type === 'pointerdown' ? link : null;
       if (!link) return;
       // Core captures pointers on its root, redirecting the eventual click away
       // from the addon link. Let the addon's target handler run, then stop bubbling.
       link.addEventListener(event.type, stop, { once: true });
+      // The addon replaces every link overlay whenever output is written. When that
+      // happens between pointerdown and pointerup, the browser fires no click on
+      // either overlay, so the click is lost. Forward it to the overlay for the same
+      // URL now under the pointer; the addon still checks the modifier key.
+      if (event.type === 'pointerup' && pressedLink && pressedLink !== link
+        && !pressedLink.isConnected && pressedLink.href === link.href) {
+        link.dispatchEvent(new PointerEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          detail: 1,
+          pointerType: event.pointerType,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+        }));
+      }
     };
     container.addEventListener('pointerdown', handler, true);
     container.addEventListener('pointerup', handler, true);

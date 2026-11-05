@@ -40,5 +40,6 @@ plans/
 
 # Browser integration tests
 .browser-test-dist/
+.ai-eval/
 playwright-report/
 test-results/

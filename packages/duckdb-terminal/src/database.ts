@@ -1,6 +1,7 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
 import type * as arrow from 'apache-arrow';
 import type { QueryResult, CompletionSuggestion } from './types';
+import { readableError } from './utils/duckdb-error';
 
 /**
  * Configuration options for the Database class.
@@ -13,8 +14,9 @@ export interface DatabaseOptions {
    */
   storage?: 'memory' | 'opfs';
   /**
-   * The database file path when using OPFS storage.
-   * Defaults to ':memory:' for in-memory storage.
+   * The database file path when using OPFS storage, with the `opfs://`
+   * prefix (for example `'opfs://mydata.duckdb'`); a path without it is
+   * not persisted. Defaults to ':memory:' for in-memory storage.
    */
   databasePath?: string;
   /**
@@ -60,7 +62,7 @@ export interface DatabaseOptions {
  * ```typescript
  * const db = new Database({
  *   storage: 'opfs',
- *   databasePath: '/mydata.duckdb',
+ *   databasePath: 'opfs://mydata.duckdb',
  * });
  * await db.init();
  * // Data persists across page refreshes
@@ -103,12 +105,6 @@ export interface SQLError {
   errorSubtype: string;
 }
 
-export interface StreamQueryResult {
-  columns: string[];
-  columnTypes: string[];
-  rowBatches: AsyncIterable<unknown[][]>;
-}
-
 export interface ResetSettingsResult {
   /** Number of settings that differed from their initial values. */
   resetCount: number;
@@ -131,6 +127,12 @@ type NormalizedDatabaseOptions = DatabaseOptions & {
   maximumThreads: number;
 };
 
+/**
+ * Worker prelude that removes OPFS before DuckDB loads: DuckDB-Wasm skips its
+ * OPFS mount when `navigator.storage.getDirectory` is not a function.
+ */
+const WORKER_WITHOUT_OPFS = 'if (self.StorageManager) delete self.StorageManager.prototype.getDirectory;\n';
+
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
@@ -139,6 +141,8 @@ export class Database {
   private db: duckdb.AsyncDuckDB | null = null;
   private conn: duckdb.AsyncDuckDBConnection | null = null;
   private activeSentQuery: symbol | null = null;
+  /** Tail of the connection work queue; see {@link Database.withConnection}. */
+  private connectionQueue: Promise<void> = Promise.resolve();
   private worker: Worker | null = null;
   private initialized = false;
   private options: NormalizedDatabaseOptions;
@@ -204,32 +208,6 @@ export class Database {
       );
     }
 
-    // COI workers must retain their real script URL so Emscripten can pass it
-    // to pthread workers during bootstrap. Single-threaded CDN workers still
-    // need the blob/importScripts bridge because classic workers are subject
-    // to the same-origin restriction.
-    let workerUrl: string | undefined;
-    if (bundle.pthreadWorker) {
-      this.worker = new Worker(bundle.mainWorker);
-    } else {
-      workerUrl = URL.createObjectURL(
-        new Blob([`importScripts("${bundle.mainWorker}");`], {
-          type: 'text/javascript',
-        })
-      );
-      this.worker = new Worker(workerUrl);
-    }
-    const logger = new duckdb.VoidLogger();
-    this.db = new duckdb.AsyncDuckDB(logger, this.worker);
-
-    try {
-      await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    } finally {
-      if (workerUrl) {
-        URL.revokeObjectURL(workerUrl);
-      }
-    }
-
     // Note: We intentionally do NOT use castBigIntToDouble here.
     // While it would simplify JSON serialization, it corrupts array values
     // (e.g., range(10) returns garbage like [5e-324, 1e-323, ...]).
@@ -247,10 +225,34 @@ export class Database {
       maximumThreads,
       ...(useOPFS ? { accessMode: duckdb.DuckDBAccessMode.READ_WRITE } : {}),
     };
-    await this.db.open(openConfig);
-
-    // Create connection
-    this.conn = await this.db.connect();
+    let db: duckdb.AsyncDuckDB;
+    try {
+      db = await this.startWorker(bundle, false);
+      try {
+        await db.open(openConfig);
+      } catch (error) {
+        // DuckDB-Wasm mounts an OPFS scratch file system whenever it opens a
+        // database, an in-memory one too, and the open fails where OPFS is
+        // unavailable (WebKit's ephemeral contexts, private windows). An
+        // in-memory database does not need OPFS: restart DuckDB without it.
+        // COI workers keep their real script URL, so they cannot be started
+        // without it, and an OPFS database needs it. Remove this fallback once
+        // https://github.com/duckdb/duckdb-wasm/issues/2302 is fixed.
+        if (useOPFS || bundle.pthreadWorker) throw error;
+        await this.close();
+        console.warn('DuckDB could not open a database with OPFS; restarting it without OPFS:', error);
+        try {
+          db = await this.startWorker(bundle, true);
+          await db.open(openConfig);
+        } catch {
+          throw error;
+        }
+      }
+      this.conn = await db.connect();
+    } catch (error) {
+      await this.close();
+      throw error;
+    }
     this.initialized = true;
 
     try {
@@ -259,6 +261,42 @@ export class Database {
       await this.close();
       throw error;
     }
+  }
+
+  /**
+   * Starts a DuckDB worker and instantiates DuckDB in it. With `withoutOPFS`,
+   * the worker has no `navigator.storage.getDirectory()`, so DuckDB does not
+   * mount its OPFS scratch file system.
+   */
+  private async startWorker(bundle: duckdb.DuckDBBundle, withoutOPFS: boolean): Promise<duckdb.AsyncDuckDB> {
+    // COI workers must retain their real script URL so Emscripten can pass it
+    // to pthread workers during bootstrap. Single-threaded CDN workers still
+    // need the blob/importScripts bridge because classic workers are subject
+    // to the same-origin restriction.
+    let workerUrl: string | undefined;
+    if (bundle.pthreadWorker) {
+      this.worker = new Worker(bundle.mainWorker!);
+    } else {
+      const prelude = withoutOPFS ? WORKER_WITHOUT_OPFS : '';
+      workerUrl = URL.createObjectURL(
+        new Blob([`${prelude}importScripts("${bundle.mainWorker}");`], {
+          type: 'text/javascript',
+        })
+      );
+      this.worker = new Worker(workerUrl);
+    }
+    const logger = new duckdb.VoidLogger();
+    const db = new duckdb.AsyncDuckDB(logger, this.worker);
+    this.db = db;
+
+    try {
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    } finally {
+      if (workerUrl) {
+        URL.revokeObjectURL(workerUrl);
+      }
+    }
+    return db;
   }
 
   /**
@@ -317,44 +355,73 @@ export class Database {
     return this.conn.cancelSent();
   }
 
-  private async executeSentQuery(sql: string, maxRows?: number): Promise<QueryResult> {
-    const startTime = performance.now();
-    const { reader, queryToken } = await this.startSentQuery(sql);
+  private executeSentQuery(sql: string, maxRows?: number): Promise<QueryResult> {
+    // The connection stays held until the result is fully read or cancelled.
+    return this.withConnection(async (conn) => {
+      const startTime = performance.now();
+      const { reader, queryToken } = await this.startSentQuery(conn, sql);
+      let fullyRead = false;
 
-    try {
-      const columns = reader.schema.fields.map((field) => field.name);
-      const columnTypes = reader.schema.fields.map((field) => String(field.type));
-      const rows: unknown[][] = [];
-      let truncated = false;
+      try {
+        const columns = reader.schema.fields.map((field) => field.name);
+        const columnTypes = reader.schema.fields.map((field) => String(field.type));
+        const rows: unknown[][] = [];
+        let truncated = false;
 
-      outer: for await (const batch of reader) {
-        const remainingRows = maxRows === undefined
-          ? Number.POSITIVE_INFINITY
-          : maxRows - rows.length + 1;
-        const batchRows = this.rowsFromBatch(batch, columns.length, remainingRows);
-        for (const row of batchRows) {
-          if (maxRows !== undefined && rows.length === maxRows) {
-            truncated = true;
-            break outer;
+        outer: for await (const batch of reader) {
+          const remainingRows = maxRows === undefined
+            ? Number.POSITIVE_INFINITY
+            : maxRows - rows.length + 1;
+          const batchRows = this.rowsFromBatch(batch, columns.length, remainingRows);
+          for (const row of batchRows) {
+            if (maxRows !== undefined && rows.length === maxRows) {
+              truncated = true;
+              break outer;
+            }
+            rows.push(row);
           }
-          rows.push(row);
+        }
+
+        if (truncated) {
+          await this.cancelActiveQuery();
+        } else {
+          fullyRead = true;
+        }
+
+        return {
+          columns,
+          columnTypes,
+          rows,
+          rowCount: rows.length,
+          duration: performance.now() - startTime,
+          truncated: truncated || undefined,
+        };
+      } finally {
+        this.finishSentQuery(queryToken);
+        if (!fullyRead) {
+          await this.releaseOpenResult(conn);
         }
       }
+    }).catch((error: unknown) => {
+      // Parser errors arrive as JSON; users and the AI model get DuckDB's text.
+      throw readableError(error);
+    });
+  }
 
-      if (truncated) {
-        await this.cancelActiveQuery();
-      }
-
-      return {
-        columns,
-        columnTypes,
-        rows,
-        rowCount: rows.length,
-        duration: performance.now() - startTime,
-        truncated: truncated || undefined,
-      };
-    } finally {
-      this.finishSentQuery(queryToken);
+  /**
+   * Releases a result that was not read to the end (truncated, cancelled, or
+   * failed while streaming). DuckDB-Wasm keeps such a result open on the
+   * connection and refuses to prepare statements until it is gone ("connection
+   * has an open result"), which broke pagination checks and the AI write guard
+   * after a truncated result. Cancelling does not release it; starting another
+   * query does.
+   */
+  private async releaseOpenResult(conn: duckdb.AsyncDuckDBConnection): Promise<void> {
+    try {
+      const reader = await conn.send('SELECT 1');
+      for await (const batch of reader) void batch;
+    } catch {
+      // The next statement reports any lasting problem with the connection.
     }
   }
 
@@ -368,15 +435,17 @@ export class Database {
     }
 
     const pageSQL = `SELECT * FROM (${sql}) AS _page_subquery LIMIT 0`;
-    let statement: Awaited<ReturnType<duckdb.AsyncDuckDBConnection['prepare']>>;
-    try {
-      statement = await this.conn.prepare(pageSQL);
-    } catch {
-      return false;
-    }
+    return this.withConnection(async (conn) => {
+      let statement: Awaited<ReturnType<duckdb.AsyncDuckDBConnection['prepare']>>;
+      try {
+        statement = await conn.prepare(pageSQL);
+      } catch {
+        return false;
+      }
 
-    await statement.close();
-    return true;
+      await statement.close();
+      return true;
+    });
   }
 
   /**
@@ -402,42 +471,35 @@ export class Database {
   }
 
   /**
-   * Sends a SQL query and returns Arrow record batches as row arrays.
+   * Runs connection work one operation at a time.
    *
-   * This is intended for output modes that can display rows incrementally.
-   * Callers that need a fully materialized result should keep using
-   * {@link executeQuery}.
-   *
-   * @param sql - The SQL statement to execute
-   * @returns A stream result containing column metadata and async row batches
-   *
-   * @throws Error if the database is not initialized
-   * @throws Error if the SQL query is invalid or fails
+   * DuckDB-Wasm keys sent queries, result-chunk fetches, and cancellation by
+   * connection rather than by query, so a statement started while another
+   * result is still being read takes over that connection's result. Each
+   * operation therefore holds the connection until its result is fully
+   * consumed. {@link cancelActiveQuery} deliberately bypasses this queue.
    */
-  async streamQuery(sql: string): Promise<StreamQueryResult> {
-    const { reader, queryToken } = await this.startSentQuery(sql);
-    const columns = reader.schema.fields.map((field) => field.name);
-    const columnTypes = reader.schema.fields.map((field) => String(field.type));
-
-    return {
-      columns,
-      columnTypes,
-      rowBatches: this.readRowBatches(reader, columns.length, queryToken),
-    };
+  private withConnection<T>(
+    operation: (conn: duckdb.AsyncDuckDBConnection) => Promise<T>
+  ): Promise<T> {
+    const run = this.connectionQueue.then(() => {
+      if (!this.conn) {
+        throw new Error('Database not initialized');
+      }
+      return operation(this.conn);
+    });
+    this.connectionQueue = run.then(() => undefined, () => undefined);
+    return run;
   }
 
-  private async startSentQuery(sql: string): Promise<{
+  private async startSentQuery(conn: duckdb.AsyncDuckDBConnection, sql: string): Promise<{
     reader: arrow.AsyncRecordBatchStreamReader;
     queryToken: symbol;
   }> {
-    if (!this.conn) {
-      throw new Error('Database not initialized');
-    }
-
     const queryToken = Symbol('sent-query');
     this.activeSentQuery = queryToken;
     try {
-      const reader = await this.conn.send(sql, true);
+      const reader = await conn.send(sql, true);
       await reader.open();
       return { reader, queryToken };
     } catch (error) {
@@ -449,20 +511,6 @@ export class Database {
   private finishSentQuery(queryToken: symbol): void {
     if (this.activeSentQuery === queryToken) {
       this.activeSentQuery = null;
-    }
-  }
-
-  private async *readRowBatches(
-    reader: arrow.AsyncRecordBatchStreamReader,
-    columnCount: number,
-    queryToken: symbol
-  ): AsyncIterable<unknown[][]> {
-    try {
-      for await (const batch of reader) {
-        yield this.rowsFromBatch(batch, columnCount);
-      }
-    } finally {
-      this.finishSentQuery(queryToken);
     }
   }
 
@@ -685,17 +733,18 @@ export class Database {
     }
 
     try {
-      // Get all databases to find which one is the default (internal = true)
-      // The default database doesn't need a prefix
+      // Tables of the current database need no prefix. DuckDB marks its own
+      // catalogs (system, temp) as internal; only other user databases count.
       const dbResult = await this.executeQuery(
-        'SELECT database_name, internal FROM duckdb_databases()'
+        'SELECT database_name, internal, database_name = current_database() FROM duckdb_databases()'
       );
       const databases = dbResult.rows.map((row) => ({
         name: String(row[0]),
         internal: Boolean(row[1]),
+        current: Boolean(row[2]),
       }));
-      const defaultDbName = databases.find((db) => db.internal)?.name || 'memory';
-      const hasMultipleDatabases = databases.length > 1;
+      const defaultDbName = databases.find((db) => db.current)?.name ?? 'memory';
+      const hasMultipleDatabases = databases.filter((db) => !db.internal).length > 1;
 
       // Get all tables from all databases (all schemas, not just 'main')
       const result = await this.executeQuery(
@@ -921,9 +970,11 @@ export class Database {
         return !initialSettings.has(name) || initialValue !== value ? [name] : [];
       });
 
-      for (const name of changedSettings) {
-        await this.conn.query(`RESET ${quoteIdentifier(name)}`);
-      }
+      await this.withConnection(async (conn) => {
+        for (const name of changedSettings) {
+          await conn.query(`RESET ${quoteIdentifier(name)}`);
+        }
+      });
 
       if (changedSettings.length > 0) {
         const resetSettings = await this.readSettings();
@@ -950,28 +1001,26 @@ export class Database {
     }
   }
 
-  private async readSettings(): Promise<Map<string, DatabaseSettingValue>> {
-    if (!this.conn) {
-      throw new Error('Database not initialized');
-    }
+  private readSettings(): Promise<Map<string, DatabaseSettingValue>> {
+    return this.withConnection(async (conn) => {
+      const result = await conn.query(
+        'SELECT name, value FROM duckdb_settings() ORDER BY name'
+      );
+      const names = result.getChildAt(0);
+      const values = result.getChildAt(1);
+      const settings = new Map<string, DatabaseSettingValue>();
 
-    const result = await this.conn.query(
-      'SELECT name, value FROM duckdb_settings() ORDER BY name'
-    );
-    const names = result.getChildAt(0);
-    const values = result.getChildAt(1);
-    const settings = new Map<string, DatabaseSettingValue>();
-
-    for (let rowIndex = 0; rowIndex < result.numRows; rowIndex++) {
-      const name = names?.get(rowIndex);
-      if (name === null || name === undefined) {
-        continue;
+      for (let rowIndex = 0; rowIndex < result.numRows; rowIndex++) {
+        const name = names?.get(rowIndex);
+        if (name === null || name === undefined) {
+          continue;
+        }
+        const value = values?.get(rowIndex);
+        settings.set(String(name), value === null || value === undefined ? null : String(value));
       }
-      const value = values?.get(rowIndex);
-      settings.set(String(name), value === null || value === undefined ? null : String(value));
-    }
 
-    return settings;
+      return settings;
+    });
   }
 
   private async reinitialize(reloadPoached: boolean): Promise<void> {

@@ -268,6 +268,60 @@ describe('Gespenst adapter boundaries', () => {
     expect(createTerminal).not.toHaveBeenCalled();
   });
 
+  describe('link clicks while output re-creates the link overlays', () => {
+    const overlay = (href: string) => {
+      const link = document.createElement('a');
+      link.className = 'gespenst__link';
+      link.href = href;
+      container.append(link);
+      return link;
+    };
+    const press = (target: Element, type: 'pointerdown' | 'pointerup', init: PointerEventInit = {}) =>
+      target.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'mouse', ...init }));
+
+    it('forwards the click to the overlay that replaced the pressed one', async () => {
+      await adapter.init(container);
+      const pressed = overlay('https://example.com/path');
+      press(pressed, 'pointerdown', { metaKey: true });
+      pressed.remove();
+      const replacement = overlay('https://example.com/path');
+      const clicks: MouseEvent[] = [];
+      replacement.addEventListener('click', (event) => clicks.push(event));
+
+      press(replacement, 'pointerup', { metaKey: true, ctrlKey: true });
+
+      expect(clicks).toHaveLength(1);
+      expect(clicks[0]).toBeInstanceOf(PointerEvent);
+      expect(clicks[0]).toMatchObject({ detail: 1, metaKey: true, ctrlKey: true, pointerType: 'mouse' });
+    });
+
+    it('leaves clicks to the browser when the overlay was not replaced', async () => {
+      await adapter.init(container);
+      const link = overlay('https://example.com/path');
+      const click = vi.fn();
+      link.addEventListener('click', click);
+
+      press(link, 'pointerdown');
+      press(link, 'pointerup');
+
+      expect(click).not.toHaveBeenCalled();
+    });
+
+    it('does not forward a click to an overlay for another URL', async () => {
+      await adapter.init(container);
+      const pressed = overlay('https://example.com/old');
+      press(pressed, 'pointerdown');
+      pressed.remove();
+      const other = overlay('https://example.com/new');
+      const click = vi.fn();
+      other.addEventListener('click', click);
+
+      press(other, 'pointerup');
+
+      expect(click).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects the removed byte-based setting', () => {
     expect(() => adapter.init(container, { scrollback: 1024 } as never)).toThrow('Use scrollbackLines');
   });

@@ -160,8 +160,8 @@ export type { DuckDBBundles } from '@duckdb/duckdb-wasm';
 export { HistoryStore } from './utils/history';
 export { InputBuffer } from './utils/input-buffer';
 
-// Export command and pagination modules
-export { createCommands, type CommandContext, type Command, type CommandHandler } from './commands';
+// Export command types and the pagination module
+export type { Command, CommandHandler } from './types';
 export { PaginationHandler, type PaginationContext, type PaginationState } from './pagination';
 
 // Export themes
@@ -177,6 +177,7 @@ export {
   formatTSVLines,
   formatJSON,
   formatJSONLines,
+  toDisplayValue,
 } from './utils/table-formatter';
 export { copyToClipboard, readFromClipboard, isClipboardAvailable } from './utils/clipboard';
 export { highlightSQL, isSQLComplete } from './utils/syntax-highlight';
@@ -221,19 +222,5 @@ export type {
   ShareableURLResult,
 } from './sharing';
 
-// Export AI utilities
-export {
-  getAISettings,
-  saveAISettings,
-  getDefaultEndpoint,
-  getDefaultProvider,
-  clearAISettings,
-  type AISettings,
-  type AIProvider,
-} from './utils/ai-settings';
-export {
-  checkProxyAvailable,
-  fetchProviders,
-  generateSQL,
-  AIClientError,
-} from './utils/ai-client';
+// Export the local AI model catalog used by `.model` and `.ai`
+export { AI_MODELS, formatMiB, getModelUrl, type AIModel, type AIModelSampling } from './ai/models';

@@ -1,0 +1,41 @@
+product_id,sku,name,category,unit_price,active
+1,SKU-0001,Ceramic Mug,Kitchen,63.12,true
+2,SKU-0002,Chef Knife,Kitchen,8.88,true
+3,SKU-0003,Cutting Board,Kitchen,39.67,true
+4,SKU-0004,French Press,Kitchen,24.42,true
+5,SKU-0005,Spice Rack,Kitchen,9.75,true
+6,SKU-0006,Cast Iron Pan,Kitchen,60.15,true
+7,SKU-0007,Tea Kettle,Kitchen,,true
+8,SKU-0008,Salad Bowl,Kitchen,49.26,true
+9,SKU-0009,Wireless Mouse,Electronics,27.04,false
+10,SKU-0010,USB-C Hub,Electronics,91.30,true
+11,SKU-0011,Bluetooth Speaker,Electronics,86.68,true
+12,SKU-0012,Noise Cancelling Headphones,Electronics,249.97,true
+13,SKU-0013,Phone Charger,Electronics,203.41,true
+14,SKU-0014,Smart Plug,Electronics,23.80,false
+15,SKU-0015,Webcam,Electronics,148.23,true
+16,SKU-0016,Mechanical Keyboard,Electronics,86.94,true
+17,SKU-0017,SQL for Analysts,Books,34.65,true
+18,SKU-0018,The Data Warehouse Toolkit,Books,40.98,true
+19,SKU-0019,Cooking for Two,Books,32.86,true
+20,SKU-0020,Gardening Basics,Books,18.22,true
+21,SKU-0021,Travel Guide Portugal,Books,37.08,true
+22,SKU-0022,Mystery at Sea,Books,,true
+23,SKU-0023,Learning DuckDB,Books,38.84,true
+24,SKU-0024,Poems of the North,Books,35.66,true
+25,SKU-0025,Garden Hose,Garden,34.29,true
+26,SKU-0026,Pruning Shears,Garden,66.22,true
+27,SKU-0027,Seed Starter Kit,Garden,39.16,true
+28,SKU-0028,Watering Can,Garden,81.49,true
+29,SKU-0029,Raised Bed Kit,Garden,92.43,true
+30,SKU-0030,Solar Lamp,Garden,50.72,false
+31,SKU-0031,Bird Feeder,Garden,100.24,true
+32,SKU-0032,Compost Bin,Garden,22.15,true
+33,SKU-0033,Wooden Train Set,Toys,12.28,true
+34,SKU-0034,Puzzle 1000 Pieces,Toys,-4.99,true
+35,SKU-0035,Building Blocks,Toys,40.68,true
+36,SKU-0036,Plush Bear,Toys,63.41,true
+37,SKU-0037,Kite,Toys,41.50,true
+38,SKU-0038,Board Game Classic,Toys,56.57,true
+39,SKU-0039,Remote Control Car,Toys,67.97,false
+40,SKU-0040,Craft Kit,Toys,59.04,true

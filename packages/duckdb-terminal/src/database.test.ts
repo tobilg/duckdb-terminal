@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock @duckdb/duckdb-wasm
 const mockQuery = vi.fn();
@@ -100,6 +100,19 @@ function createMockBatch(rows: unknown[][]) {
     numRows: rows.length,
     getChildAt: vi.fn().mockImplementation((columnIndex: number) => ({
       get: vi.fn().mockImplementation((rowIndex: number) => rows[rowIndex][columnIndex]),
+    })),
+  };
+}
+
+/** duckdb_databases() as DuckDB reports it: the user's database is not internal; system and temp are. */
+const DEFAULT_DATABASES: unknown[][] = [['memory', false, true], ['system', true, false], ['temp', true, false]];
+
+function databasesResult(rows: unknown[][]) {
+  return {
+    schema: { fields: [{ name: 'database_name' }, { name: 'internal' }, { name: 'is_current' }] },
+    numRows: rows.length,
+    getChildAt: vi.fn().mockImplementation((j: number) => ({
+      get: vi.fn().mockImplementation((i: number) => rows[i][j]),
     })),
   };
 }
@@ -260,6 +273,80 @@ describe('Database', () => {
         maximumThreads: 1,
       });
     });
+
+    describe('without usable OPFS', () => {
+      const opfsError = new Error('UnknownError: The operation failed for an unknown transient reason (e.g. out of memory).');
+      const workerScripts = () => vi.mocked(URL.createObjectURL).mock.calls.map(([blob]) => (blob as Blob).text());
+      let warn: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      });
+      afterEach(() => {
+        warn.mockRestore();
+        // Unused queued rejections would otherwise fail later tests (the outer beforeEach sets the defaults again).
+        mockOpen.mockReset();
+        mockInstantiate.mockReset();
+      });
+
+      it('restarts DuckDB without OPFS when an in-memory database cannot be opened', async () => {
+        mockOpen.mockRejectedValueOnce(opfsError);
+
+        await db.init();
+
+        expect(db.isReady()).toBe(true);
+        expect(mockInstantiate).toHaveBeenCalledTimes(2);
+        expect(mockOpen).toHaveBeenCalledTimes(2);
+        expect(mockTerminate).toHaveBeenCalledOnce();
+        const [first, second] = await Promise.all(workerScripts());
+        expect(first).toBe('importScripts("mock-eh-worker");');
+        expect(second).toBe(
+          'if (self.StorageManager) delete self.StorageManager.prototype.getDirectory;\nimportScripts("mock-eh-worker");'
+        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('restarting it without OPFS'), opfsError);
+      });
+
+      it('reports the first error when DuckDB cannot be opened without OPFS either', async () => {
+        mockOpen.mockRejectedValueOnce(opfsError).mockRejectedValueOnce(new Error('still failing'));
+
+        await expect(db.init()).rejects.toBe(opfsError);
+
+        expect(db.isReady()).toBe(false);
+        expect(mockTerminate).toHaveBeenCalledTimes(2);
+      });
+
+      it('does not restart DuckDB for an OPFS database', async () => {
+        db = new Database({ storage: 'opfs', databasePath: 'opfs://test.db' });
+        mockOpen.mockRejectedValueOnce(opfsError);
+
+        await expect(db.init()).rejects.toBe(opfsError);
+
+        expect(mockInstantiate).toHaveBeenCalledOnce();
+        expect(mockTerminate).toHaveBeenCalledOnce();
+        expect(warn).not.toHaveBeenCalled();
+      });
+
+      it('does not restart a COI worker, which keeps its script URL', async () => {
+        const coi = { mainModule: 'mock-coi-module', mainWorker: 'mock-coi-worker', pthreadWorker: 'mock-coi-pthread-worker' };
+        mockSelectBundle.mockResolvedValue(coi);
+        db = new Database({ bundles: { ...mockDefaultBundles, coi }, maximumThreads: 2 });
+        mockOpen.mockRejectedValueOnce(opfsError);
+
+        await expect(db.init()).rejects.toBe(opfsError);
+
+        expect(mockInstantiate).toHaveBeenCalledOnce();
+        expect(warn).not.toHaveBeenCalled();
+      });
+
+      it('releases the worker when DuckDB cannot be instantiated', async () => {
+        mockInstantiate.mockRejectedValueOnce(new Error('wasm failed'));
+
+        await expect(db.init()).rejects.toThrow('wasm failed');
+
+        expect(mockOpen).not.toHaveBeenCalled();
+        expect(mockTerminate).toHaveBeenCalledOnce();
+      });
+    });
   });
 
   describe('executeQuery', () => {
@@ -410,6 +497,26 @@ describe('Database', () => {
       expect(result.rowCount).toBe(2);
       expect(result.truncated).toBe(true);
       expect(mockCancelSent).toHaveBeenCalledOnce();
+      // DuckDB-Wasm keeps the unread rest open and refuses to prepare
+      // statements until another query replaces it.
+      expect(mockSend).toHaveBeenCalledTimes(2);
+      expect(mockSend).toHaveBeenLastCalledWith('SELECT 1');
+    });
+
+    it('should release a result that fails while streaming', async () => {
+      mockSend.mockResolvedValueOnce({
+        schema: { fields: [{ name: 'value', type: 'INTEGER' }] },
+        open: vi.fn().mockResolvedValue(undefined),
+        async *[Symbol.asyncIterator]() {
+          yield* [];
+          throw new Error('query was canceled');
+        },
+      });
+
+      await db.init();
+      await expect(db.executeQuery('SELECT * FROM big')).rejects.toThrow('query was canceled');
+
+      expect(mockSend).toHaveBeenLastCalledWith('SELECT 1');
     });
 
     it('should not mark a result at the exact limit as truncated', async () => {
@@ -424,6 +531,7 @@ describe('Database', () => {
       expect(result.rows).toEqual([[1], [2]]);
       expect(result.truncated).toBeUndefined();
       expect(mockCancelSent).not.toHaveBeenCalled();
+      expect(mockSend).toHaveBeenCalledOnce();
     });
 
     it('should reject invalid limits', async () => {
@@ -463,6 +571,18 @@ describe('Database', () => {
       finishReading();
       await query;
       await expect(db.cancelActiveQuery()).resolves.toBe(false);
+    });
+
+    it('reports JSON errors from DuckDB-Wasm as DuckDB text', async () => {
+      mockSend.mockRejectedValueOnce(new Error(JSON.stringify({
+        exception_type: 'Parser',
+        exception_message: 'syntax error at or near "descrbe"\n\nLINE 1: descrbe SELECT 1',
+        error_subtype: 'SYNTAX_ERROR',
+      })));
+      await db.init();
+
+      const error = await db.executeQuery('descrbe SELECT 1').catch((reason: Error) => reason);
+      expect(error.message).toBe('Parser Error: syntax error at or near "descrbe"\n\nLINE 1: descrbe SELECT 1');
     });
 
     it('should clear its active token when sending fails', async () => {
@@ -530,34 +650,89 @@ describe('Database', () => {
     });
   });
 
-  describe('streamQuery', () => {
-    it('should throw if not initialized', async () => {
-      await expect(db.streamQuery('SELECT 1')).rejects.toThrow('Database not initialized');
+  describe('connection serialization', () => {
+    // A sent result whose rows arrive only after `release` is called.
+    function createHeldReader(rows: unknown[][]) {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      const reader = {
+        schema: { fields: [{ name: 'value' }] },
+        open: vi.fn(async () => reader),
+        async *[Symbol.asyncIterator]() {
+          await released;
+          yield createMockBatch(rows);
+        },
+      };
+      return { reader, release };
+    }
+
+    async function settle() {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    it('should not send another query until the current result is fully read', async () => {
+      const held = createHeldReader([[1]]);
+      mockSend
+        .mockResolvedValueOnce(held.reader)
+        .mockResolvedValueOnce(createMockReader([{ name: 'value' }], [[[2]]]));
+      await db.init();
+
+      const first = db.executeQuery('SELECT 1');
+      const second = db.executeQuery('SELECT 2');
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(mockSend).toHaveBeenCalledTimes(1);
+
+      held.release();
+      await expect(first).resolves.toMatchObject({ rows: [[1]] });
+      await expect(second).resolves.toMatchObject({ rows: [[2]] });
+      expect(mockSend.mock.calls.map(([sql]) => sql)).toEqual(['SELECT 1', 'SELECT 2']);
     });
 
-    it('should send query with streaming enabled and return row batches', async () => {
-      mockSend.mockResolvedValueOnce(createMockReader(
-        [{ name: 'name', type: 'VARCHAR' }, { name: 'age', type: 'INTEGER' }],
-        [
-          [['Alice', 30]],
-          [['Bob', 25]],
-        ]
-      ));
-
+    it('should not prepare a pagination probe while a result is being read', async () => {
+      const held = createHeldReader([[1]]);
+      mockSend.mockResolvedValueOnce(held.reader);
+      mockPrepare.mockResolvedValueOnce({ close: vi.fn().mockResolvedValue(undefined) });
       await db.init();
-      const result = await db.streamQuery('SELECT name, age FROM users');
-      const batches: unknown[][][] = [];
-      for await (const rows of result.rowBatches) {
-        batches.push(rows);
-      }
 
-      expect(mockSend).toHaveBeenCalledWith('SELECT name, age FROM users', true);
-      expect(result.columns).toEqual(['name', 'age']);
-      expect(result.columnTypes).toEqual(['VARCHAR', 'INTEGER']);
-      expect(batches).toEqual([
-        [['Alice', 30]],
-        [['Bob', 25]],
-      ]);
+      const query = db.executeQuery('SELECT 1');
+      const probe = db.canPaginateQuery('SELECT 2');
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(mockPrepare).not.toHaveBeenCalled();
+
+      held.release();
+      await query;
+      await expect(probe).resolves.toBe(true);
+      expect(mockPrepare).toHaveBeenCalledOnce();
+    });
+
+    it('should cancel the running query without waiting for the connection', async () => {
+      const held = createHeldReader([[1]]);
+      mockSend.mockResolvedValueOnce(held.reader);
+      await db.init();
+
+      const query = db.executeQuery('SELECT 1');
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+
+      await expect(db.cancelActiveQuery()).resolves.toBe(true);
+      expect(mockCancelSent).toHaveBeenCalledOnce();
+
+      held.release();
+      await query;
+    });
+
+    it('should keep serving queries after one fails', async () => {
+      mockSend
+        .mockRejectedValueOnce(new Error('Parser Error'))
+        .mockResolvedValueOnce(createMockReader([{ name: 'value' }], [[[2]]]));
+      await db.init();
+
+      const failed = db.executeQuery('SELEC 1');
+      const next = db.executeQuery('SELECT 2');
+
+      await expect(failed).rejects.toThrow('Parser Error');
+      await expect(next).resolves.toMatchObject({ rows: [[2]] });
     });
   });
 
@@ -610,13 +785,7 @@ describe('Database', () => {
 
     it('should return table names', async () => {
       // First query: get databases (single database case)
-      mockQuery.mockResolvedValueOnce({
-        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
-        numRows: 1,
-        getChildAt: vi.fn().mockImplementation((j: number) => ({
-          get: vi.fn().mockImplementation(() => j === 0 ? 'memory' : true),
-        })),
-      });
+      mockQuery.mockResolvedValueOnce(databasesResult(DEFAULT_DATABASES));
       // Second query: get all tables
       mockQuery.mockResolvedValueOnce({
         schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
@@ -640,19 +809,7 @@ describe('Database', () => {
 
     it('should return qualified table names only for attached databases', async () => {
       // First query: get databases (multiple databases)
-      mockQuery.mockResolvedValueOnce({
-        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
-        numRows: 2,
-        getChildAt: vi.fn().mockImplementation((j: number) => ({
-          get: vi.fn().mockImplementation((i: number) => {
-            const data = [
-              ['memory', true],
-              ['mydb', false],
-            ];
-            return data[i][j];
-          }),
-        })),
-      });
+      mockQuery.mockResolvedValueOnce(databasesResult([...DEFAULT_DATABASES, ['mydb', false, false]]));
       // Second query: get all tables
       mockQuery.mockResolvedValueOnce({
         schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
@@ -682,13 +839,7 @@ describe('Database', () => {
 
     it('should include schema name when not main', async () => {
       // First query: get databases (single database)
-      mockQuery.mockResolvedValueOnce({
-        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
-        numRows: 1,
-        getChildAt: vi.fn().mockImplementation((j: number) => ({
-          get: vi.fn().mockImplementation(() => j === 0 ? 'memory' : true),
-        })),
-      });
+      mockQuery.mockResolvedValueOnce(databasesResult(DEFAULT_DATABASES));
       // Second query: get all tables including non-main schema
       mockQuery.mockResolvedValueOnce({
         schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
@@ -718,19 +869,7 @@ describe('Database', () => {
 
     it('should handle attached database with non-main schema', async () => {
       // First query: get databases (multiple databases)
-      mockQuery.mockResolvedValueOnce({
-        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
-        numRows: 2,
-        getChildAt: vi.fn().mockImplementation((j: number) => ({
-          get: vi.fn().mockImplementation((i: number) => {
-            const data = [
-              ['memory', true],
-              ['mydb', false],
-            ];
-            return data[i][j];
-          }),
-        })),
-      });
+      mockQuery.mockResolvedValueOnce(databasesResult([...DEFAULT_DATABASES, ['mydb', false, false]]));
       // Second query: get all tables
       mockQuery.mockResolvedValueOnce({
         schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },
@@ -760,19 +899,7 @@ describe('Database', () => {
 
     it('should show database prefix when only attached database has tables', async () => {
       // First query: get databases (memory + attached)
-      mockQuery.mockResolvedValueOnce({
-        schema: { fields: [{ name: 'database_name' }, { name: 'internal' }] },
-        numRows: 2,
-        getChildAt: vi.fn().mockImplementation((j: number) => ({
-          get: vi.fn().mockImplementation((i: number) => {
-            const data = [
-              ['memory', true],
-              ['aws_iam', false],
-            ];
-            return data[i][j];
-          }),
-        })),
-      });
+      mockQuery.mockResolvedValueOnce(databasesResult([...DEFAULT_DATABASES, ['aws_iam', false, false]]));
       // Second query: get all tables (only from attached db)
       mockQuery.mockResolvedValueOnce({
         schema: { fields: [{ name: 'table_catalog' }, { name: 'table_schema' }, { name: 'table_name' }] },

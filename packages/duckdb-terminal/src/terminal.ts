@@ -44,18 +44,9 @@ import type {
   TerminalEventListener,
 } from './types';
 import { saveTheme, getSavedTheme, getTheme } from './themes';
-import {
-  getAISettings,
-  saveAISettings,
-  getDefaultEndpoint,
-  getDefaultProvider,
-} from './utils/ai-settings';
-import {
-  checkProxyAvailable,
-  fetchProviders,
-  generateSQL,
-  AIClientError,
-} from './utils/ai-client';
+import { AIAssistant, AssistantError, type QueryOutcome, type SchemaContextOptions } from './ai/assistant';
+import { AI_MODELS, formatMiB, type AIModel } from './ai/models';
+import { databaseAlias, isDatabaseFile, notAttachedNote, readerFor } from './ai/file-urls';
 
 /** Default primary prompt displayed before each command */
 const DEFAULT_PROMPT = '🦆 ';
@@ -190,10 +181,17 @@ export class DuckDBTerminal implements TerminalInterface {
   // Cleanup function for drag-and-drop
   private dragDropCleanup: (() => void) | null = null;
 
-  // AI settings (lazy-loaded to avoid localStorage access on construction)
-  private aiSettingsLoaded = false;
-  private aiEndpoint: string = 'http://localhost:4000';
-  private aiProvider: string = 'claude';
+  // In-browser AI assistant, created on first use of .model or .ai
+  private aiAssistant: AIAssistant | null = null;
+
+  // A command waiting for a line of user input (see readLine)
+  private lineReader: { buffer: string; resolve: (line: string | null) => void } | null = null;
+
+  // Ctrl+C aborts a long-running command (model download, AI generation)
+  private commandAbort: AbortController | null = null;
+
+  // Raw text of the dot command being executed
+  private commandInput = '';
 
   constructor(config: TerminalConfig) {
     validateScrollback(config);
@@ -597,6 +595,11 @@ export class DuckDBTerminal implements TerminalInterface {
     if (this.destroyPromise) return this.destroyPromise;
     this.disposed = true;
     if (this.activeQueryExecution) this.activeQueryExecution.cancelRequested = true;
+    this.commandAbort?.abort();
+    this.lineReader?.resolve(null);
+    this.lineReader = null;
+    const assistantDisposal = this.aiAssistant?.dispose();
+    this.aiAssistant = null;
     const cancellation = this.database.cancelActiveQuery().catch(() => false);
     this.dragDropCleanup?.();
     this.dragDropCleanup = null;
@@ -611,6 +614,7 @@ export class DuckDBTerminal implements TerminalInterface {
     this.destroyPromise = (async () => {
       await Promise.allSettled([
         cancellation, this.startPromise, this.queryQueue, this.inputOperation, this.themeQueue,
+        assistantDisposal,
       ]);
       this.history.close();
       await this.database.close();
@@ -895,11 +899,18 @@ export class DuckDBTerminal implements TerminalInterface {
       handler: () => this.openSharingModal(),
     });
 
+    this.commands.set('.model', {
+      name: '.model',
+      description: 'Choose and install a local AI model',
+      usage: `.model [1-${AI_MODELS.length}]`,
+      handler: (args) => this.cmdModel(args),
+    });
+
     this.commands.set('.ai', {
       name: '.ai',
-      description: 'AI-powered natural language to SQL',
-      usage: '.ai query <question> | .ai provider list|set <name> | .ai endpoint get|set <url>',
-      handler: (args) => this.cmdAI(args),
+      description: 'Ask the local AI model about your data',
+      usage: '.ai <prompt>',
+      handler: () => this.cmdAI(),
     });
   }
 
@@ -1002,6 +1013,10 @@ export class DuckDBTerminal implements TerminalInterface {
    */
   private handleInput(data: string): void {
     if (this.disposed) return;
+    if (this.lineReader) {
+      this.handleLineReaderInput(data);
+      return;
+    }
     if (this.state === 'executing') {
       if (data.includes('\x03')) {
         void this.cancelQuery();
@@ -1009,7 +1024,10 @@ export class DuckDBTerminal implements TerminalInterface {
       return; // Ignore all other input while executing
     }
 
-    if (this.commandBusy || this.pendingSQL) return;
+    if (this.commandBusy || this.pendingSQL) {
+      if (this.commandBusy && data.includes('\x03')) this.commandAbort?.abort();
+      return;
+    }
 
     // Handle pagination mode
     if (this.state === 'paginating') {
@@ -1198,6 +1216,9 @@ export class DuckDBTerminal implements TerminalInterface {
    * a semicolon terminates the statement, then executes.
    */
   private async handleEnter(): Promise<void> {
+    // The line is consumed now. A pending redraw would otherwise fire mid-command
+    // and repaint the submitted line over the command's output.
+    this.debouncedHighlight.cancel();
     const input = this.inputBuffer.getContent();
     this.writeln('');
 
@@ -1473,16 +1494,16 @@ export class DuckDBTerminal implements TerminalInterface {
     let text: string;
     switch (this.outputMode) {
       case 'csv':
-        text = formatCSV(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        text = formatCSV(this.lastQueryResult.columns, this.lastQueryResult.rows, this.lastQueryResult.columnTypes);
         break;
       case 'tsv':
-        text = formatTSV(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        text = formatTSV(this.lastQueryResult.columns, this.lastQueryResult.rows, this.lastQueryResult.columnTypes);
         break;
       case 'json':
-        text = formatJSON(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        text = formatJSON(this.lastQueryResult.columns, this.lastQueryResult.rows, this.lastQueryResult.columnTypes);
         break;
       default:
-        text = formatTable(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        text = formatTable(this.lastQueryResult.columns, this.lastQueryResult.rows, { columnTypes: this.lastQueryResult.columnTypes, alignByType: false });
     }
 
     const success = await copyToClipboard(text);
@@ -1511,22 +1532,22 @@ export class DuckDBTerminal implements TerminalInterface {
 
     switch (this.outputMode) {
       case 'csv':
-        content = formatCSV(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        content = formatCSV(this.lastQueryResult.columns, this.lastQueryResult.rows, this.lastQueryResult.columnTypes);
         extension = '.csv';
         mimeType = 'text/csv';
         break;
       case 'tsv':
-        content = formatTSV(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        content = formatTSV(this.lastQueryResult.columns, this.lastQueryResult.rows, this.lastQueryResult.columnTypes);
         extension = '.tsv';
         mimeType = 'text/tab-separated-values';
         break;
       case 'json':
-        content = formatJSON(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        content = formatJSON(this.lastQueryResult.columns, this.lastQueryResult.rows, this.lastQueryResult.columnTypes);
         extension = '.json';
         mimeType = 'application/json';
         break;
       default:
-        content = formatTable(this.lastQueryResult.columns, this.lastQueryResult.rows);
+        content = formatTable(this.lastQueryResult.columns, this.lastQueryResult.rows, { columnTypes: this.lastQueryResult.columnTypes, alignByType: false });
         extension = '.txt';
         mimeType = 'text/plain';
     }
@@ -1590,6 +1611,7 @@ export class DuckDBTerminal implements TerminalInterface {
     this.emit('commandExecute', { command: cmdName, args });
 
     try {
+      this.commandInput = input;
       await command.handler(args, this);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1874,13 +1896,13 @@ export class DuckDBTerminal implements TerminalInterface {
     } else {
       switch (this.outputMode) {
         case 'csv':
-          lines = formatCSVLines(result.columns, result.rows);
+          lines = formatCSVLines(result.columns, result.rows, result.columnTypes);
           break;
         case 'tsv':
-          lines = formatTSVLines(result.columns, result.rows);
+          lines = formatTSVLines(result.columns, result.rows, result.columnTypes);
           break;
         case 'json':
-          lines = formatJSONLines(result.columns, result.rows);
+          lines = formatJSONLines(result.columns, result.rows, result.columnTypes);
           break;
         case 'table':
         default:
@@ -2184,6 +2206,9 @@ export class DuckDBTerminal implements TerminalInterface {
       // Clear last query result
       this.lastQueryResult = null;
 
+      // The AI conversation refers to the dropped tables
+      this.aiAssistant?.resetConversation();
+
       // Clear history state
       this.history.reset();
 
@@ -2426,323 +2451,522 @@ export class DuckDBTerminal implements TerminalInterface {
 
   // ==================== AI Commands ====================
 
-  /**
-   * Loads AI settings from localStorage on first use.
-   */
-  private loadAISettings(): void {
-    if (!this.aiSettingsLoaded) {
-      const settings = getAISettings();
-      this.aiEndpoint = settings.endpoint;
-      this.aiProvider = settings.provider;
-      this.aiSettingsLoaded = true;
+  /** Returns the in-browser assistant, creating it on first use. */
+  private getAssistant(): AIAssistant {
+    if (!this.aiAssistant) {
+      this.aiAssistant = new AIAssistant({
+        write: (text) => this.write(text),
+        getSchema: (options) => this.buildSchemaContext(options),
+        runQuery: (sql, signal) => this.runAssistantQuery(sql, signal),
+      });
     }
+    return this.aiAssistant;
   }
 
   /**
-   * Main handler for the .ai command.
-   * Routes to subcommand handlers based on the first argument.
+   * Reads one line of input while a command runs, such as a menu choice or a
+   * yes/no answer. Resolves to the trimmed line, or null on Ctrl+C.
    */
-  private async cmdAI(args: string[]): Promise<void> {
-    this.loadAISettings();
+  private readLine(promptText: string): Promise<string | null> {
+    this.lineReader?.resolve(null);
+    this.write(promptText);
+    return new Promise((resolve) => {
+      this.lineReader = { buffer: '', resolve };
+    });
+  }
 
-    if (args.length === 0) {
+  private handleLineReaderInput(data: string): void {
+    const reader = this.lineReader;
+    if (!reader || data.startsWith('\x1b')) return; // ignore arrow keys and other sequences
+    for (const char of data) {
+      if (char === '\r' || char === '\n') {
+        this.lineReader = null;
+        this.writeln('');
+        reader.resolve(reader.buffer.trim());
+        return;
+      }
+      if (char === '\x03') {
+        this.lineReader = null;
+        this.writeln('^C');
+        reader.resolve(null);
+        return;
+      }
+      if (char === '\x7f' || char === '\b') {
+        const chars = Array.from(reader.buffer);
+        if (chars.length > 0) {
+          reader.buffer = chars.slice(0, -1).join('');
+          this.write('\b \b');
+        }
+      } else if (char >= ' ') {
+        reader.buffer += char;
+        this.write(char);
+      }
+    }
+  }
+
+  /** Handles `.model`: lists the local models, then selects or installs one. */
+  private async cmdModel(args: string[]): Promise<void> {
+    const assistant = this.getAssistant();
+    let statuses: Array<{ model: AIModel; installed: boolean | null }>;
+    try {
+      statuses = await assistant.getModelStatuses();
+    } catch (error) {
+      this.writeln(vt100.colorize(`Could not check installed models: ${errorMessage(error)}`, vt100.FG_YELLOW));
+      statuses = AI_MODELS.map((model) => ({ model, installed: null }));
+    }
+
+    const selected = assistant.selectedModel;
+    const labelWidth = Math.max(...statuses.map(({ model }) => model.label.length));
+    this.writeln(vt100.bold('Local AI models') + vt100.dim(' (run in your browser with wllama)'));
+    statuses.forEach(({ model, installed }, index) => {
+      const notes = [
+        installed ? vt100.colorize('installed', vt100.FG_GREEN) : null,
+        model.id === selected?.id ? vt100.colorize('selected', vt100.FG_CYAN) : null,
+      ].filter((note): note is string => note !== null);
+      this.writeln(
+        `  ${index + 1}. ${model.label.padEnd(labelWidth)}  ${formatMiB(model.sizeBytes).padStart(8)}` +
+        (notes.length > 0 ? `  ${notes.join(', ')}` : '')
+      );
+    });
+    if (!assistant.hasWebGPU()) {
+      this.writeln(vt100.colorize(
+        'WebGPU is not available in this browser: models run on the CPU, which is much slower.',
+        vt100.FG_YELLOW
+      ));
+    }
+    this.writeln('');
+
+    const choice = args[0] ?? await this.readLine(`Select a model (1-${statuses.length}): `);
+    if (!choice) {
+      this.writeln(vt100.dim('No model selected.'));
+      return;
+    }
+    const index = Number(choice);
+    if (!Number.isInteger(index) || index < 1 || index > statuses.length) {
+      this.writeln(vt100.colorize(
+        `Invalid selection: ${choice}. Enter a number from 1 to ${statuses.length}.`,
+        vt100.FG_RED
+      ));
+      return;
+    }
+
+    const { model, installed } = statuses[index - 1];
+    if (installed) {
+      assistant.selectModel(model);
+      this.writeln(vt100.colorize(`Using ${model.label}. Ask it with .ai <prompt>`, vt100.FG_GREEN));
+      return;
+    }
+
+    const answer = await this.readLine(
+      `Do you want to install the selected model (size ${formatMiB(model.sizeBytes)}) in your browser (yes/no) `
+    );
+    if (!isYes(answer)) {
+      this.writeln(vt100.dim('Installation cancelled.'));
+      return;
+    }
+
+    const controller = new AbortController();
+    this.commandAbort = controller;
+    let lastPercent = -1;
+    const showProgress = (loaded: number, total: number) => {
+      const percent = total > 0 ? Math.min(100, Math.floor((loaded / total) * 100)) : 0;
+      if (percent === lastPercent) return;
+      lastPercent = percent;
+      this.write(`\r${vt100.CLEAR_LINE}${vt100.dim(
+        `Downloading ${model.label}… ${percent}% (${formatMiB(loaded)} of ${formatMiB(total)}, Ctrl+C to cancel)`
+      )}`);
+    };
+    showProgress(0, model.sizeBytes);
+    try {
+      await assistant.install(model, { signal: controller.signal, onProgress: showProgress });
+      this.write(`\r${vt100.CLEAR_LINE}`);
+      assistant.selectModel(model);
+      this.writeln(vt100.colorize(`Installed ${model.label}. Ask it with .ai <prompt>`, vt100.FG_GREEN));
+    } catch (error) {
+      this.write(`\r${vt100.CLEAR_LINE}`);
+      if (controller.signal.aborted) {
+        this.writeln(vt100.colorize('Download cancelled.', vt100.FG_YELLOW));
+      } else {
+        this.writeln(vt100.colorize(`Download failed: ${errorMessage(error)}`, vt100.FG_RED));
+      }
+    } finally {
+      if (this.commandAbort === controller) this.commandAbort = null;
+    }
+  }
+
+  /** Handles `.ai <prompt>`: asks the selected local model, which may run SQL. */
+  private async cmdAI(): Promise<void> {
+    // Use the raw text: argument parsing would strip quotes from the prompt.
+    const prompt = this.commandInput.trim().replace(/^\S+\s*/, '');
+    if (!prompt) {
       this.showAIHelp();
       return;
     }
 
-    const subcommand = args[0].toLowerCase();
-
-    switch (subcommand) {
-      case 'query':
-        await this.cmdAIQuery(args.slice(1));
-        break;
-      case 'provider':
-        await this.cmdAIProvider(args.slice(1));
-        break;
-      case 'endpoint':
-        this.cmdAIEndpoint(args.slice(1));
-        break;
-      default:
-        // Treat everything as a query if it doesn't match a subcommand
-        await this.cmdAIQuery(args);
-        break;
-    }
-  }
-
-  /**
-   * Shows help for AI commands.
-   */
-  private showAIHelp(): void {
-    this.writeln(vt100.bold('AI Commands:'));
-    this.writeln('');
-    this.writeln(`  ${vt100.colorize('.ai <question>', vt100.FG_CYAN)}`);
-    this.writeln('    Generate SQL from natural language question (shorthand)');
-    this.writeln('');
-    this.writeln(`  ${vt100.colorize('.ai query <question>', vt100.FG_CYAN)}`);
-    this.writeln('    Generate SQL from natural language question');
-    this.writeln('');
-    this.writeln(`  ${vt100.colorize('.ai provider list', vt100.FG_CYAN)}`);
-    this.writeln('    List available AI providers');
-    this.writeln('');
-    this.writeln(`  ${vt100.colorize('.ai provider set <name>', vt100.FG_CYAN)}`);
-    this.writeln('    Set the AI provider to use');
-    this.writeln('');
-    this.writeln(`  ${vt100.colorize('.ai endpoint get', vt100.FG_CYAN)}`);
-    this.writeln('    Show current proxy endpoint');
-    this.writeln('');
-    this.writeln(`  ${vt100.colorize('.ai endpoint set <url>', vt100.FG_CYAN)}`);
-    this.writeln('    Set the proxy endpoint URL');
-  }
-
-  /**
-   * Shows the proxy unavailable error message.
-   */
-  private showProxyUnavailableError(): void {
-    this.writeln(
-      vt100.colorize(
-        'Please install and run the Text-to-SQL Proxy, see https://github.com/tobilg/text-to-sql-proxy',
-        vt100.FG_RED
-      )
-    );
-  }
-
-  /**
-   * Handles the .ai query subcommand.
-   * Generates SQL from a natural language question.
-   */
-  private async cmdAIQuery(args: string[]): Promise<void> {
-    if (args.length === 0) {
-      this.writeln(vt100.colorize('Error: Please provide a question', vt100.FG_RED));
-      this.writeln('Usage: .ai query <your question>');
-      return;
-    }
-
-    const question = args.join(' ');
-
-    // Check if proxy is available
-    const proxyAvailable = await checkProxyAvailable(this.aiEndpoint);
-    if (!proxyAvailable) {
-      this.showProxyUnavailableError();
-      return;
-    }
-
-    // Get DDL from database
-    const ddl = await this.database.getAllDDL();
-
-    if (!ddl) {
-      this.writeln(
-        vt100.colorize(
-          'Please create tables or views to be able to use the Text-to-SQL features',
-          vt100.FG_YELLOW
-        )
-      );
-      return;
-    }
-
-    this.writeln(vt100.dim('Generating SQL...'));
-
+    const controller = new AbortController();
+    this.commandAbort = controller;
     try {
-      const sql = await generateSQL(
-        this.aiEndpoint,
-        ddl,
-        question,
-        this.aiProvider
-      );
-
-      // Split SQL into lines for multi-line display with continuation prompts
-      const lines = sql.trim().split('\n');
-
-      // Show the SQL in the prompt as if the user typed it
-      this.writeln('');
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const promptText = i === 0 ? this.prompt : this.continuationPrompt;
-        this.write(promptText);
-        const highlighted = await this.getHighlightedSQLAsync(line);
-        this.write(highlighted);
-        this.writeln('');
-      }
-
-      // Flatten SQL for history (easier to re-execute)
-      const flattenedSQL = sql.replace(/\s*\n\s*/g, ' ').replace(/\s+/g, ' ').trim();
-
-      // Add to history
-      await this.history.add(flattenedSQL);
-
-      // Execute the generated SQL
-      this.writeln('');
-      const execution = this.createQueryExecution();
-      execution.historyRecorded = true;
-      await this.enqueueSQL(sql.trim(), execution);
+      await this.getAssistant().ask(prompt, controller.signal);
     } catch (error) {
-      if (error instanceof AIClientError) {
-        this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
+      if (controller.signal.aborted) {
+        this.writeln(vt100.colorize('Stopped.', vt100.FG_YELLOW));
+      } else if (error instanceof AssistantError) {
+        this.writeln(vt100.colorize(error.message, vt100.FG_YELLOW));
       } else {
-        this.writeln(
-          vt100.colorize(
-            `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            vt100.FG_RED
-          )
-        );
+        const message = errorMessage(error);
+        this.writeln(vt100.colorize(`Error: ${message}`, vt100.FG_RED));
+        this.emit('error', { message, source: 'ai' });
       }
+    } finally {
+      if (this.commandAbort === controller) this.commandAbort = null;
+    }
+  }
+
+  private showAIHelp(): void {
+    const model = this.getAssistant().selectedModel;
+    this.writeln(`Usage: ${vt100.colorize('.ai <prompt>', vt100.FG_CYAN)}`);
+    this.writeln('Asks a local language model about your data. The model runs in your browser and');
+    this.writeln('runs SQL on the database, including statements that change data.');
+    this.writeln('Follow-up prompts continue the conversation. Press Ctrl+C to stop.');
+    this.writeln('');
+    this.writeln(model
+      ? `Model: ${model.label} (change it with ${vt100.colorize('.model', vt100.FG_CYAN)})`
+      : `No model selected yet: run ${vt100.colorize('.model', vt100.FG_CYAN)} to choose and install one.`);
+  }
+
+  /**
+   * The schema DDL sent with a prompt, optionally with sample rows and the
+   * values of short text columns, so the model can use exact names and values.
+   * Previews read at most 10,000 rows per column and are best effort.
+   */
+  private async buildSchemaContext({ sampleRows, distinctValues, urls }: SchemaContextOptions): Promise<string> {
+    const parts: string[] = [];
+    const ddl = await this.database.getAllDDL();
+    if (ddl) parts.push(ddl);
+    const quote = (identifier: string) => `"${identifier.replace(/"/g, '""')}"`;
+    const allTables = await this.database.getTables();
+    const tables = ddl && (sampleRows > 0 || distinctValues) ? allTables.slice(0, AI_PREVIEW_MAX_TABLES) : [];
+    for (const table of tables) {
+      const name = table.split('.').map(quote).join('.');
+      try {
+        if (sampleRows > 0) {
+          const sample = await this.database.executeQueryLimited(`SELECT * FROM ${name} LIMIT ${sampleRows}`, sampleRows);
+          parts.push(`-- First rows of ${table}:\n${formatCSV(sample.columns, previewRows(sample.rows), sample.columnTypes)}`);
+        }
+        if (distinctValues) {
+          const textColumns = (await this.database.getTableSchema(table))
+            .filter((column) => /^VARCHAR/i.test(column.type))
+            .slice(0, AI_PREVIEW_MAX_TEXT_COLUMNS);
+          const lines: string[] = [];
+          for (const column of textColumns) {
+            const values = await this.database.executeQueryLimited(
+              `SELECT DISTINCT ${quote(column.name)} FROM (SELECT ${quote(column.name)} FROM ${name} LIMIT 10000) ` +
+              `WHERE ${quote(column.name)} IS NOT NULL ORDER BY 1 LIMIT ${AI_PREVIEW_MAX_VALUES + 1}`,
+              AI_PREVIEW_MAX_VALUES + 1
+            );
+            const distinct = values.rows.map((row) => String(row[0]));
+            if (distinct.length > 0 && distinct.length <= AI_PREVIEW_MAX_VALUES && distinct.every((value) => value.length <= 40)) {
+              lines.push(`${column.name}: ${distinct.map((value) => `'${value.replace(/'/g, "''")}'`).join(', ')}`);
+            }
+          }
+          if (lines.length > 0) parts.push(`-- All values of short text columns in ${table}:\n${lines.join('\n')}`);
+        }
+      } catch {
+        // A preview is a hint for the model; the schema alone still works.
+      }
+    }
+    const files = await this.describeLoadedFiles(allTables, sampleRows);
+    if (files) parts.push(files);
+    const webFiles = await this.describeWebFiles(urls, sampleRows);
+    if (webFiles) parts.push(webFiles);
+    const databaseFiles = [
+      ...[...this.loadedFiles.keys()].filter(isDatabaseFile),
+      ...urls.filter(isDatabaseFile).slice(0, AI_PREVIEW_MAX_URLS),
+    ];
+    const databases = await this.describeDatabaseFiles(databaseFiles);
+    // A database the model still has to attach comes first: below it, the tables of other data would draw its queries.
+    if (databases?.notAttached) parts.unshift(databases.text);
+    else if (databases) parts.push(databases.text);
+    return parts.join('\n\n');
+  }
+
+  /**
+   * Tells the model how to use DuckDB database files, loaded or at URLs: they
+   * are attached, not read, so it gets the exact ATTACH statement, or the name
+   * a file is already attached under (its tables are then in the DDL above).
+   * The terminal never attaches a file by itself.
+   */
+  private async describeDatabaseFiles(files: readonly string[]): Promise<{ text: string; notAttached: boolean } | null> {
+    if (files.length === 0) return null;
+    const attachedAs = new Map<string, string>();
+    const names = new Set<string>();
+    try {
+      const databases = await this.database.executeQuery('SELECT database_name, path FROM duckdb_databases()');
+      for (const [name, path] of databases.rows) {
+        names.add(String(name));
+        if (path !== null && path !== undefined) attachedAs.set(String(path), String(name));
+      }
+    } catch {
+      // Without the attached databases, every file gets its ATTACH statement.
+    }
+    let notAttached = false;
+    const lines = files.map((file) => {
+      const name = attachedAs.get(file);
+      // The DDL already writes its tables with the prefix; "as name.table_name" made models write name.name.table.
+      if (name) return `-- ${file} is attached as ${name}: its tables are the ${name}. tables above; query them by exactly those names.`;
+      notAttached = true;
+      const alias = names.has(databaseAlias(file)) ? `${databaseAlias(file)}_db` : databaseAlias(file);
+      return notAttachedNote(file, alias);
+    });
+    const text = ['-- DuckDB database files (attached with ATTACH, never read with read_csv or read_parquet):', ...lines].join('\n');
+    return { text, notAttached };
+  }
+
+  /** Adds the columns and first rows of a file source, e.g. read_csv('name'), to `lines`. */
+  private async describeFile(source: string, name: string, sampleRows: number, lines: string[]): Promise<void> {
+    const columns = await this.database.executeQueryLimited(`DESCRIBE SELECT * FROM ${source}`, 200);
+    lines.push(`-- ${source} has the columns: ${columns.rows.map((row) => `${row[0]} ${row[1]}`).join(', ')}`);
+    if (sampleRows > 0) {
+      const sample = await this.database.executeQueryLimited(`SELECT * FROM ${source} LIMIT ${sampleRows}`, sampleRows);
+      lines.push(`-- First rows of ${name}:\n${formatCSV(sample.columns, previewRows(sample.rows), sample.columnTypes)}`);
     }
   }
 
   /**
-   * Handles the .ai provider subcommand.
-   * Lists or sets the AI provider.
+   * Describes the files at URLs in the conversation's questions like loaded
+   * files, so the model knows their columns before its first query, or knows
+   * that a file cannot be read (wrong URL, or a server that does not allow
+   * browsers). The URLs come newest first; older ones beyond the limit are left out.
    */
-  private async cmdAIProvider(args: string[]): Promise<void> {
-    if (args.length === 0) {
-      // Show current provider
-      this.writeln(`Current provider: ${this.aiProvider}`);
-      return;
-    }
-
-    const action = args[0].toLowerCase();
-
-    if (action === 'list') {
-      // Check if proxy is available
-      const proxyAvailable = await checkProxyAvailable(this.aiEndpoint);
-      if (!proxyAvailable) {
-        this.showProxyUnavailableError();
-        return;
-      }
-
-      this.writeln(vt100.dim('Fetching providers...'));
-
+  private async describeWebFiles(urls: readonly string[], sampleRows: number): Promise<string> {
+    const lines: string[] = [];
+    for (const url of urls.slice(0, AI_PREVIEW_MAX_URLS)) {
+      const reader = readerFor(url);
+      if (!reader) continue;
+      const source = `${reader}('${url.replace(/'/g, "''")}')`;
+      const before = lines.length;
       try {
-        const providers = await fetchProviders(this.aiEndpoint);
-
-        if (providers.length === 0) {
-          this.writeln(vt100.dim('No providers available'));
-          return;
+        await this.describeFile(source, url, sampleRows, lines);
+      } catch (error) {
+        // Without sample rows the columns are still useful.
+        if (lines.length === before) {
+          lines.push(`-- ${source} cannot be read: ${errorMessage(error).split('\n')[0].slice(0, 200)}`);
         }
+      }
+    }
+    if (lines.length === 0) return '';
+    return ['-- Files on the web named in this conversation; query them with their full URL:', ...lines].join('\n');
+  }
 
-        this.writeln('');
-        this.writeln(vt100.bold('Available providers:'));
-        for (const provider of providers) {
-          const isCurrent = provider.name === this.aiProvider;
-          const marker = isCurrent ? vt100.colorize(' (current)', vt100.FG_GREEN) : '';
-          this.writeln(`  ${vt100.colorize(provider.name, vt100.FG_CYAN)}${marker}`);
-          if (provider.description) {
-            this.writeln(`    ${vt100.dim(provider.description)}`);
+  /**
+   * Describes loaded files the model can query by name, skipping files already
+   * loaded into a table of the same name. Without this the model would not
+   * know about files the user dropped into the terminal.
+   */
+  private async describeLoadedFiles(tables: string[], sampleRows: number): Promise<string> {
+    const tableNames = new Set(tables.map((table) => table.split('.').pop()!.toLowerCase()));
+    const files = [...this.loadedFiles.keys()]
+      .filter((file) => !isDatabaseFile(file))
+      .filter((file) => !tableNames.has(file.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase()))
+      .slice(0, AI_PREVIEW_MAX_TABLES);
+    if (files.length === 0) return '';
+    const lines: string[] = [];
+    for (const file of files) {
+      const reader = FILE_READERS[getFileExtension(file)];
+      if (!reader) {
+        lines.push(`-- ${file}`);
+        continue;
+      }
+      const source = `${reader}('${file.replace(/'/g, "''")}')`;
+      try {
+        await this.describeFile(source, file, sampleRows, lines);
+      } catch {
+        lines.push(`-- ${file}`);
+      }
+    }
+    const example = lines.find((line) => line.startsWith('-- read_'))?.match(/^-- (\S+\('[^']*'\))/)?.[1] ?? "read_csv('file.csv')";
+    return [`-- Files you can query directly with SQL (they are not tables), for example SELECT * FROM ${example}:`, ...lines].join('\n');
+  }
+
+  /** Names of the attached databases, or null when they cannot be listed. */
+  private async databaseNames(): Promise<Set<string> | null> {
+    try {
+      const result = await this.database.executeQuery('SELECT database_name FROM duckdb_databases()');
+      return new Set(result.rows.map(([name]) => String(name)));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The tables and columns of databases attached since `before`, as DDL with
+   * the first rows of each table for the model, and as a list for the
+   * assistant's answer. Null when nothing was added.
+   */
+  private async describeNewDatabases(
+    before: Set<string> | null
+  ): Promise<{ text: string; databases: Array<{ name: string; tables: string[] }> } | null> {
+    if (!before) return null;
+    const after = await this.databaseNames();
+    const added = [...(after ?? [])].filter((name) => !before.has(name));
+    if (added.length === 0) return null;
+    const parts: string[] = [];
+    const databases: Array<{ name: string; tables: string[] }> = [];
+    for (const name of added) {
+      try {
+        const columns = await this.database.executeQueryLimited(
+          'SELECT schema_name, table_name, string_agg(column_name || \' \' || data_type, \', \' ORDER BY column_index) ' +
+          `FROM duckdb_columns() WHERE database_name = '${name.replace(/'/g, "''")}' ` +
+          'GROUP BY schema_name, table_name ORDER BY schema_name, table_name',
+          AI_ATTACH_MAX_TABLES
+        );
+        const tables: string[] = [];
+        let size = 0;
+        for (const [schema, table, list] of columns.rows) {
+          const ddl = `CREATE TABLE ${name}.${schema === 'main' ? '' : `${schema}.`}${table} (${list});`;
+          if (size + ddl.length > AI_ATTACH_MAX_CHARS) break;
+          tables.push(ddl);
+          size += ddl.length + 1;
+        }
+        const more = columns.truncated || tables.length < columns.rows.length ? '\n-- More tables: SHOW ALL TABLES lists them all.' : '';
+        // The first rows show what the columns hold, as for the user's own tables.
+        const samples: string[] = [];
+        for (const [schema, table] of columns.rows.slice(0, AI_ATTACH_SAMPLE_TABLES)) {
+          const qualified = [name, schema, table].map((part) => `"${String(part).replace(/"/g, '""')}"`).join('.');
+          const label = `${name}.${schema === 'main' ? '' : `${schema}.`}${table}`;
+          try {
+            const sample = await this.database.executeQueryLimited(`SELECT * FROM ${qualified} LIMIT 3`, 3);
+            // Small models take a few rows for the whole table unless told otherwise.
+            const text = `-- First 3 rows of ${label} (a sample, not all rows):\n${formatCSV(sample.columns, previewRows(sample.rows), sample.columnTypes)}`;
+            if (size + text.length > AI_ATTACH_MAX_CHARS) break;
+            samples.push(text);
+            size += text.length + 2;
+          } catch {
+            // The DDL alone still tells the model what to query.
           }
         }
-      } catch (error) {
-        if (error instanceof AIClientError) {
-          this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
-        } else {
-          this.writeln(
-            vt100.colorize(
-              `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              vt100.FG_RED
-            )
-          );
-        }
+        parts.push(tables.length > 0
+          ? `Its tables, to query with the ${name}. prefix:\n${tables.join('\n')}${more}${samples.length ? `\n\n${samples.join('\n\n')}` : ''}`
+          : `It has no tables.`);
+        databases.push({ name, tables: columns.rows.map((row) => `${row[0] === 'main' ? '' : `${row[0]}.`}${row[1]}`) });
+      } catch {
+        databases.push({ name, tables: [] });
       }
-    } else if (action === 'set') {
-      const providerName = args.slice(1).join(' ');
-
-      if (!providerName) {
-        this.writeln(vt100.colorize('Error: Please provide a provider name', vt100.FG_RED));
-        this.writeln('Usage: .ai provider set <name>');
-        return;
-      }
-
-      // Check if proxy is available
-      const proxyAvailable = await checkProxyAvailable(this.aiEndpoint);
-      if (!proxyAvailable) {
-        this.showProxyUnavailableError();
-        return;
-      }
-
-      // Validate provider exists
-      try {
-        const providers = await fetchProviders(this.aiEndpoint);
-        const provider = providers.find(
-          (p) => p.name.toLowerCase() === providerName.toLowerCase()
-        );
-
-        if (!provider) {
-          this.writeln(vt100.colorize(`Error: Provider "${providerName}" not found`, vt100.FG_RED));
-          this.writeln('Use .ai provider list to see available providers');
-          return;
-        }
-
-        this.aiProvider = provider.name;
-        saveAISettings({ provider: this.aiProvider });
-        this.writeln(vt100.colorize(`Provider set to: ${this.aiProvider}`, vt100.FG_GREEN));
-      } catch (error) {
-        if (error instanceof AIClientError) {
-          this.writeln(vt100.colorize(`Error: ${error.message}`, vt100.FG_RED));
-        } else {
-          this.writeln(
-            vt100.colorize(
-              `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              vt100.FG_RED
-            )
-          );
-        }
-      }
-    } else if (action === 'clear' || action === 'reset') {
-      const defaultProvider = getDefaultProvider();
-      this.aiProvider = defaultProvider;
-      saveAISettings({ provider: defaultProvider });
-      this.writeln(vt100.colorize(`Provider reset to default: ${defaultProvider}`, vt100.FG_GREEN));
-    } else {
-      this.writeln(vt100.colorize(`Unknown action: ${action}`, vt100.FG_RED));
-      this.writeln('Usage: .ai provider list|set <name>|clear');
     }
+    if (parts.length === 0) return { text: '', databases };
+    // The assistant adds what to do next: it knows the question.
+    return { text: `\n\nThe database is now attached as ${added.join(' and ')}.\n\n${parts.join('\n\n')}`, databases };
   }
 
   /**
-   * Handles the .ai endpoint subcommand.
-   * Gets or sets the proxy endpoint URL.
+   * Runs a statement the model requested, without asking first, including
+   * statements that change data. The user sees it like a typed query.
    */
-  private cmdAIEndpoint(args: string[]): void {
-    if (args.length === 0) {
-      // Show current endpoint
-      this.writeln(`Current endpoint: ${this.aiEndpoint}`);
-      return;
+  private async runAssistantQuery(sql: string, signal: AbortSignal): Promise<QueryOutcome> {
+    const statement = sql.trim();
+    const lines = statement.split('\n');
+    this.writeln('');
+    for (let i = 0; i < lines.length; i++) {
+      this.write(i === 0 ? this.prompt : this.continuationPrompt);
+      this.writeln(await this.getHighlightedSQLAsync(lines[i]));
     }
+    if (signal.aborted) throw signal.reason;
 
-    const action = args[0].toLowerCase();
-
-    if (action === 'get') {
-      this.writeln(`Endpoint: ${this.aiEndpoint}`);
-      const defaultEndpoint = getDefaultEndpoint();
-      if (this.aiEndpoint !== defaultEndpoint) {
-        this.writeln(vt100.dim(`Default: ${defaultEndpoint}`));
+    await this.history.add(statement.replace(/\s*\n\s*/g, ' ').trim());
+    // An ATTACH tells the model the new database's tables, so it can query them right away,
+    // also when it is one of several statements and a later one fails.
+    const databasesBefore = /(?:^|;)\s*attach\b/i.test(statement) ? await this.databaseNames() : null;
+    const cancel = () => void this.database.cancelActiveQuery();
+    signal.addEventListener('abort', cancel, { once: true });
+    this.emit('queryStart', { sql: statement });
+    const startTime = performance.now();
+    this.queryActivityIndicator.start();
+    try {
+      const result = await this.database.executeQueryLimited(statement, AI_QUERY_MAX_ROWS);
+      this.queryActivityIndicator.stop();
+      if (signal.aborted) throw signal.reason;
+      this.lastQueryResult = result;
+      // Statements such as ATTACH only report an empty "Success" column; it tells the user nothing.
+      const onlySuccess = result.rows.length === 0 && result.columns.length === 1 && result.columns[0] === 'Success';
+      if (result.columns.length > 0 && !onlySuccess) {
+        await this.displayResult({ ...result, truncated: undefined }, statement);
+        if (result.truncated) this.writeln(vt100.dim(`Showing the first ${AI_QUERY_MAX_ROWS} rows`));
       }
-    } else if (action === 'set') {
-      const url = args.slice(1).join(' ');
-
-      if (!url) {
-        this.writeln(vt100.colorize('Error: Please provide an endpoint URL', vt100.FG_RED));
-        this.writeln('Usage: .ai endpoint set <url>');
-        return;
-      }
-
-      // Basic URL validation
-      try {
-        new URL(url);
-      } catch {
-        this.writeln(vt100.colorize('Error: Invalid URL format', vt100.FG_RED));
-        return;
-      }
-
-      this.aiEndpoint = url;
-      saveAISettings({ endpoint: url });
-      this.writeln(vt100.colorize(`Endpoint set to: ${url}`, vt100.FG_GREEN));
-    } else if (action === 'reset') {
-      const defaultEndpoint = getDefaultEndpoint();
-      this.aiEndpoint = defaultEndpoint;
-      saveAISettings({ endpoint: defaultEndpoint });
-      this.writeln(vt100.colorize(`Endpoint reset to: ${defaultEndpoint}`, vt100.FG_GREEN));
-    } else {
-      this.writeln(vt100.colorize(`Unknown action: ${action}`, vt100.FG_RED));
-      this.writeln('Usage: .ai endpoint get|set <url>|reset');
+      const attached = databasesBefore ? await this.describeNewDatabases(databasesBefore) : null;
+      this.writeln('');
+      this.emit('queryEnd', { sql: statement, result, duration: performance.now() - startTime });
+      return {
+        ok: true,
+        result: formatToolResult(statement, result) + (attached?.text ?? ''),
+        ...(attached ? { attached: attached.databases } : {}),
+      };
+    } catch (error) {
+      this.queryActivityIndicator.stop();
+      if (signal.aborted) throw signal.reason ?? error;
+      const message = errorMessage(error);
+      this.writeln(vt100.colorize('Error: ', vt100.FG_RED) + (message.split('\n\n')[0] || message));
+      this.writeln('');
+      this.emit('queryEnd', {
+        sql: statement, result: null, error: message, duration: performance.now() - startTime,
+      });
+      const attached = databasesBefore ? await this.describeNewDatabases(databasesBefore).catch(() => null) : null;
+      return {
+        ok: false,
+        result: `SQL: ${statement}\n\nError: ${message}${attached?.text ?? ''}`,
+        error: message,
+        ...(attached ? { attached: attached.databases } : {}),
+      };
+    } finally {
+      signal.removeEventListener('abort', cancel);
     }
   }
+}
+
+/** Rows of a model-requested query shown to the user and sent to the model. */
+const AI_QUERY_MAX_ROWS = 50;
+/** Tables, text columns per table, and distinct values per column previewed for the model. */
+const AI_PREVIEW_MAX_TABLES = 8;
+const AI_PREVIEW_MAX_TEXT_COLUMNS = 8;
+const AI_PREVIEW_MAX_VALUES = 10;
+/** Files at URLs in a question that are described for the model. */
+const AI_PREVIEW_MAX_URLS = 4;
+/** Tables, and characters of their DDL, the model gets after attaching a database. */
+const AI_ATTACH_MAX_TABLES = 30;
+/** Tables of an attached database whose first rows the model gets. */
+const AI_ATTACH_SAMPLE_TABLES = 5;
+const AI_ATTACH_MAX_CHARS = 4_000;
+
+/** DuckDB table functions that read loaded files, by file extension. */
+const FILE_READERS: Record<string, string> = {
+  csv: 'read_csv', tsv: 'read_csv', txt: 'read_csv',
+  parquet: 'read_parquet',
+  json: 'read_json', jsonl: 'read_json', ndjson: 'read_json',
+};
+
+/** Shortens long text values in preview rows sent to the model. */
+function previewRows(rows: unknown[][]): unknown[][] {
+  return rows.map((row) => row.map((value) => (
+    typeof value === 'string' && value.length > 60 ? `${value.slice(0, 60)}…` : value
+  )));
+}
+/** Longest tool result sent to the model, in characters. */
+const AI_RESULT_MAX_CHARS = 8_000;
+
+function isYes(answer: string | null): boolean {
+  return answer !== null && /^y(es)?$/i.test(answer.trim());
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** The text a model receives for a query result. */
+function formatToolResult(sql: string, result: QueryResult): string {
+  if (result.columns.length === 0) {
+    return `SQL: ${sql}\n\nStatement executed successfully. No rows returned.`;
+  }
+  let csv = formatCSV(result.columns, result.rows, result.columnTypes);
+  if (csv.length > AI_RESULT_MAX_CHARS) csv = `${csv.slice(0, AI_RESULT_MAX_CHARS)}\n…(output truncated)`;
+  const note = result.truncated ? `\n(only the first ${result.rowCount} rows are shown)` : '';
+  return `SQL: ${sql}\n\n${csv}${note}`;
 }
