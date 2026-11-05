@@ -2,6 +2,10 @@
 
 All notable changes to `duckdb-terminal` are documented here.
 
+## 0.8.2 (2026-11-05)
+
+- **`.clearmodels`** removes the downloaded AI models from the browser. It lists them with their sizes, including interrupted downloads, and asks before removing. It unloads a loaded model and forgets the selected one; other files in wllama's cache stay.
+
 ## 0.8.1 (2026-11-05)
 
 - **The AI assistant works in Safari.** Safari 27 passes wllama's own check for its default build but cannot compile it (64-bit WebAssembly memory), so loading a model never finished ([ngxson/wllama#297](https://github.com/ngxson/wllama/issues/297)). Safari now runs wllama's compatibility build (16 MB, from jsDelivr like wllama), on WebGPU at about the same speed.
