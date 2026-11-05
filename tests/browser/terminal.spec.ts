@@ -156,6 +156,44 @@ test('pagination and cancellation remain responsive', async ({ page, browserName
   expect((await sql(page, 'SELECT 9 AS recovered'))?.rowCount).toBe(1);
 });
 
+test('keeps the prompt visible when the terminal gets shorter, as when an on-screen keyboard opens', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(() => window.fixture.terminal.runCommand('.help'));
+  await expect.poll(() => page.evaluate(() => window.fixture.state)).toBe('idle');
+  const rows = await page.evaluate(() => window.fixture.native.geometry.rows);
+  await page.evaluate(() => { document.getElementById('terminal')!.style.height = '200px'; });
+  await expect.poll(() => page.evaluate(() => window.fixture.native.geometry.rows)).toBeLessThan(rows);
+  // The prompt is still the last line on screen.
+  await expect.poll(async () => {
+    const visible = await page.evaluate(async () => (await window.fixture.native.readBuffer()).rows.map((row) => row.text));
+    return visible.filter((line) => line.trim()).at(-1)?.trim();
+  }).toBe('🦆');
+});
+
+test('website fits the visible part of the screen when an on-screen keyboard opens', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Website/mobile wiring runs in Chromium.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  // iOS Safari only shrinks the visual viewport for its keyboard; simulate that.
+  await page.addInitScript(() => {
+    const viewport = Object.assign(new EventTarget(), { height: 844, width: 390, scale: 1, offsetTop: 0, offsetLeft: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: viewport });
+    (window as unknown as { keyboard: (height: number) => void }).keyboard = (height) => {
+      viewport.height = 844 - height;
+      viewport.dispatchEvent(new Event('resize'));
+    };
+  });
+  await page.goto('http://127.0.0.1:4173/');
+  await expect(page.locator('#terminal-container')).toHaveAttribute('aria-busy', 'false');
+  const appHeight = () => page.locator('#app').evaluate((app) => app.getBoundingClientRect().height);
+  expect(await appHeight()).toBe(844);
+  await page.evaluate(() => (window as unknown as { keyboard: (height: number) => void }).keyboard(340));
+  await expect.poll(appHeight).toBe(504);
+  const terminalBottom = await page.locator('#terminal-container').evaluate((element) => element.getBoundingClientRect().bottom);
+  expect(terminalBottom).toBeLessThanOrEqual(504);
+  await page.evaluate(() => (window as unknown as { keyboard: (height: number) => void }).keyboard(0));
+  await expect.poll(appHeight).toBe(844);
+});
+
 test('website themes and mobile actions use the public API', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Website/mobile wiring runs in Chromium.');
   await page.setViewportSize({ width: 390, height: 844 });

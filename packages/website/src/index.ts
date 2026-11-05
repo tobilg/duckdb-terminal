@@ -163,7 +163,6 @@ function setupActions(terminal: Terminal): void {
   bind('action-clear', () => terminal.runCommand('.clear'));
   bind('action-help', () => terminal.runCommand('.help'));
   bind('action-files', () => terminal.runCommand('.open'));
-  bind('action-share', () => terminal.openSharingModal());
   bind('sidebar-share', () => terminal.openSharingModal());
   terminal.on('stateChange', ({ state }) => {
     for (const id of ['action-help', 'action-files', 'action-clear']) {
@@ -173,7 +172,31 @@ function setupActions(terminal: Terminal): void {
   });
 }
 
+/**
+ * Keeps the page inside the part of the screen the on-screen keyboard leaves
+ * free. iOS Safari (and Chrome on Android without `interactive-widget`) lays
+ * the keyboard over the page instead of shrinking it, so the terminal's last
+ * rows, where the prompt is, ended up under the keyboard. The visual viewport
+ * excludes the keyboard: sizing the page to it gives the terminal fewer rows,
+ * and the terminal keeps the cursor row visible when it shrinks.
+ */
+function fitToVisualViewport(): void {
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  const root = document.documentElement;
+  const update = () => {
+    // Times the scale: pinch-zooming also shrinks the visual viewport, but not the space for the page.
+    root.style.setProperty('--app-height', `${Math.round(viewport.height * viewport.scale)}px`);
+    // iOS may scroll the page to reveal the focused input; the page is sized to fit, so undo it.
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
+  };
+  viewport.addEventListener('resize', update);
+  viewport.addEventListener('scroll', update);
+  update();
+}
+
 async function main() {
+  fitToVisualViewport();
   const container = document.getElementById('terminal-container');
   if (!container) {
     console.error('Terminal container not found');
