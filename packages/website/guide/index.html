@@ -1789,6 +1789,7 @@ Installed Qwen3.5 0.8B (Q4_0). Ask it with .ai &lt;prompt&gt;</code></pre>
               <p><strong>Requirements:</strong></p>
               <ul>
                 <li><strong>WebGPU</strong> for usable speed: current Chrome, Edge, and Safari. Without it the model runs on the CPU, which is much slower. Firefox runs the model on the CPU, because its WebGPU waits about 100&nbsp;ms for each GPU synchronization (<a href="https://bugzilla.mozilla.org/show_bug.cgi?id=1870699" target="_blank" rel="noopener">Mozilla bug 1870699</a>). The first answer takes a few minutes there, mostly reading the prompt; Chrome, Edge, or Safari answer in seconds.</li>
+                <li><strong>Not on iPhone and iPad:</strong> every browser there uses WebKit, which gives a tab too little memory. Loading even the smallest model briefly takes about 3&nbsp;GB, and the tab crashes, so <code>.model</code> and <code>.ai</code> explain this instead of loading a model.</li>
                 <li><strong>Browser storage</strong> (Origin Private File System) for the model cache, which some private browsing modes do not provide.</li>
                 <li><strong>Disk space and GPU memory</strong> for the selected model.</li>
               </ul>

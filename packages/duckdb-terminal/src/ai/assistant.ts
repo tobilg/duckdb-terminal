@@ -54,6 +54,23 @@ const MAX_REMEMBERED_PROMPTS = 5;
 /** Thinking tokens allowed per model turn before the model must answer. */
 const REASONING_BUDGET_TOKENS = 512;
 
+/**
+ * Shown instead of loading a model on iPhone and iPad. Every browser there uses
+ * WebKit, which gives a tab too little memory: loading even the smallest model
+ * briefly takes about 3 GB in WebKit (mostly WebKit's copies while the model is
+ * read and uploaded to the GPU), and Safari on an iPhone 17 Pro crashed the tab.
+ */
+export const IOS_UNAVAILABLE_MESSAGE =
+  'The local AI models need more memory than a browser tab gets on iPhone and iPad: loading one crashes the tab. ' +
+  'Use .ai on a computer, in Chrome, Edge, or Safari.';
+
+/** iPhone and iPad (iPadOS reports itself as a Mac with touch). */
+function isIOSDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPhone|iPad|iPod/.test(navigator.userAgent)
+    || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
 /** What the schema context sent with a prompt includes besides the DDL. */
 export interface SchemaContextOptions {
   /** Sample rows per table (0 for none). */
@@ -132,6 +149,8 @@ export interface AssistantOptions {
   needsCompatBuild?: () => boolean;
   /** URLs of the compat build's worker script and WASM. */
   compatUrls?: { worker: string; wasm: string };
+  /** Reports whether this is an iPhone or iPad, where models cannot run; defaults to checking the user agent. */
+  isIOS?: () => boolean;
   /** Searches the documentation; defaults to the bundled DuckDB docs. */
   searchDocs?: (query: string) => Promise<DocsChunk[]>;
   /** Overrides of DEFAULT_TUNING. */
@@ -306,6 +325,7 @@ export class AIAssistant {
   private readonly firefox: () => boolean;
   private readonly needsCompatBuild: () => boolean;
   private readonly compatUrls: { worker: string; wasm: string };
+  private readonly isIOS: () => boolean;
   private readonly docsSearch: (query: string) => Promise<DocsChunk[]>;
   private settings: AssistantTuning;
   private cacheClient: Wllama | null = null;
@@ -326,6 +346,7 @@ export class AIAssistant {
     this.webGPU = options.hasWebGPU ?? (() => typeof navigator !== 'undefined' && 'gpu' in navigator && !this.firefox());
     this.needsCompatBuild = options.needsCompatBuild ?? (() => !canRunDefaultBuild());
     this.compatUrls = options.compatUrls ?? getWllamaCompatUrls();
+    this.isIOS = options.isIOS ?? isIOSDevice;
     this.docsSearch = options.searchDocs ?? ((query) => searchDocs(query));
     this.settings = { ...DEFAULT_TUNING, ...options.tuning };
     let saved: string | null = null;
@@ -340,6 +361,11 @@ export class AIAssistant {
   /** The model `.ai` uses, if one was selected. */
   get selectedModel(): AIModel | undefined {
     return findModel(this.selectedId);
+  }
+
+  /** Why models cannot run in this browser (iPhone and iPad), or null. */
+  unavailableReason(): string | null {
+    return this.isIOS() ? IOS_UNAVAILABLE_MESSAGE : null;
   }
 
   /** Whether models run on the GPU with WebGPU; otherwise they run on the CPU. */
@@ -449,6 +475,8 @@ export class AIAssistant {
    * and answer to the terminal. Rejects with the signal's reason when aborted.
    */
   async ask(prompt: string, signal: AbortSignal): Promise<void> {
+    const unavailable = this.unavailableReason();
+    if (unavailable) throw new AssistantError(unavailable);
     const model = this.selectedModel;
     if (!model) {
       throw new AssistantError('No model selected. Run .model to choose and install one.');
@@ -904,11 +932,16 @@ export class AIAssistant {
     const gpu = this.hasWebGPU();
     renderer.status(`Loading ${model.label} on the ${gpu ? 'GPU (WebGPU)' : 'CPU'}…`);
     const engine = new WllamaClass({ default: this.wasmUrl }, QUIET_WLLAMA_CONFIG);
-    if (this.needsCompatBuild()) useCompatBuild(engine, this.compatUrls);
+    const compat = this.needsCompatBuild();
+    if (compat) useCompatBuild(engine, this.compatUrls);
     try {
       await abortable(
         engine.loadModel(cached, {
           n_ctx: model.contextSize,
+          // On cross-origin isolated pages wllama runs several threads, which share a
+          // WebAssembly memory reserved up to 4 GB. In WebKit the threads did not make
+          // the compat build faster, and one run with them aborted.
+          ...(compat ? { n_threads: 1 } : {}),
           n_gpu_layers: gpu ? 99_999 : 0,
           cache_type_k: 'q8_0',
           cache_type_v: 'q8_0',

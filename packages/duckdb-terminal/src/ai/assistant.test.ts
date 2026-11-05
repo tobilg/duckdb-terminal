@@ -8,7 +8,7 @@ import {
   reasoningChunk,
   toolCallChunk,
 } from '../../test/wllama-mock';
-import { AIAssistant, AssistantError, SELECTED_MODEL_STORAGE_KEY, type AssistantHost } from './assistant';
+import { AIAssistant, AssistantError, IOS_UNAVAILABLE_MESSAGE, SELECTED_MODEL_STORAGE_KEY, type AssistantHost } from './assistant';
 import type { DocsChunk } from './docs-search';
 import { REPEAT_ANSWER_REQUEST } from './guardrails';
 import { AI_MODELS, getModelUrl } from './models';
@@ -25,7 +25,7 @@ const PIVOT_DOCS: DocsChunk[] = [{
 
 const COMPAT_URLS = { worker: 'https://cdn.test/compat/wllama.js', wasm: 'https://cdn.test/compat/wllama.wasm' };
 
-function setup(options: { gpu?: boolean; compat?: boolean; schema?: string } = {}) {
+function setup(options: { gpu?: boolean; compat?: boolean; ios?: boolean; schema?: string } = {}) {
   const wllama = createWllamaMock();
   const writes: string[] = [];
   const store = new Map<string, string>();
@@ -46,6 +46,7 @@ function setup(options: { gpu?: boolean; compat?: boolean; schema?: string } = {
     storage,
     hasWebGPU: () => options.gpu ?? true,
     needsCompatBuild: () => options.compat ?? false,
+    isIOS: () => options.ios ?? false,
     compatUrls: COMPAT_URLS,
     searchDocs,
   });
@@ -113,6 +114,16 @@ describe('AIAssistant model management', () => {
       const assistant = browser({ userAgent: FIREFOX, gpu: {} });
       expect(assistant.hasWebGPU()).toBe(false);
       expect(assistant.cpuReason()).toBe("Firefox's WebGPU is too slow for these models");
+    });
+
+    it('recognizes iPhone and iPad, which cannot run the models', () => {
+      const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1';
+      const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15';
+      expect(browser({ userAgent: IPHONE, gpu: {} }).unavailableReason()).toBe(IOS_UNAVAILABLE_MESSAGE);
+      // iPadOS reports itself as a Mac with touch.
+      expect(browser({ userAgent: MAC_UA, gpu: {}, maxTouchPoints: 5 }).unavailableReason()).toBe(IOS_UNAVAILABLE_MESSAGE);
+      expect(browser({ userAgent: MAC_UA, gpu: {}, maxTouchPoints: 0 }).unavailableReason()).toBeNull();
+      expect(browser({ userAgent: CHROME, gpu: {} }).unavailableReason()).toBeNull();
     });
 
     it('runs on the CPU without WebGPU', () => {
@@ -231,8 +242,26 @@ describe('AIAssistant.ask', () => {
     expect(context.wllama.state.workerResources).toEqual([
       { wasmPath: COMPAT_URLS.wasm, jsPath: COMPAT_URLS.worker, compat: true },
     ]);
-    expect(context.wllama.state.loads[0].params).toMatchObject({ n_gpu_layers: 99_999 });
+    expect(context.wllama.state.loads[0].params).toMatchObject({ n_gpu_layers: 99_999, n_threads: 1 });
     expect(context.output()).toContain('ok');
+  });
+
+  it('lets wllama choose its threads for the default build', async () => {
+    const assistant = ready(context);
+    context.wllama.state.scripts.push([contentChunk('ok'), finishChunk('stop')]);
+
+    await assistant.ask('hi', signal());
+
+    expect(context.wllama.state.loads[0].params).not.toHaveProperty('n_threads');
+    expect(context.wllama.state.loads[0].params).not.toHaveProperty('n_batch');
+  });
+
+  it('refuses to load a model on iPhone and iPad, where it crashes the tab', async () => {
+    context = setup({ ios: true });
+    const assistant = ready(context);
+
+    await expect(assistant.ask('hi', signal())).rejects.toThrow(/more memory than a browser tab gets on iPhone and iPad/);
+    expect(context.wllama.state.loads).toEqual([]);
   });
 
   it('runs on the CPU without WebGPU', async () => {

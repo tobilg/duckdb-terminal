@@ -233,6 +233,7 @@ CREATE TABLE orders AS SELECT * FROM 'https://example.com/orders.csv';
 
 - **The model's statements run without confirmation**, including ones that change data. Keep a copy of data you cannot recreate.
 - It needs WebGPU for usable speed and disk space for the model cache. It runs well in current Chrome, Edge, and Safari; Safari uses wllama's compatibility build (16 MB, also from jsDelivr). Firefox runs models on the CPU, because its WebGPU waits about 100 ms for each GPU synchronization ([Mozilla bug 1870699](https://bugzilla.mozilla.org/show_bug.cgi?id=1870699)). On the CPU, wllama uses several threads only when the page is cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`); without that, Firefox is too slow to use, and even with it the first answer takes a few minutes.
+- Not on iPhone and iPad: every browser there uses WebKit, which gives a tab too little memory. Loading even the smallest model briefly takes about 3 GB, and the tab crashes, so `.model` and `.ai` explain this instead of loading a model.
 - [wllama](https://github.com/ngxson/wllama) is loaded from jsDelivr on first use; nothing AI-related is downloaded until `.model` or `.ai` runs.
 
 ## Assets, CDNs, and Content Security Policy

@@ -2516,6 +2516,11 @@ export class DuckDBTerminal implements TerminalInterface {
   /** Handles `.model`: lists the local models, then selects or installs one. */
   private async cmdModel(args: string[]): Promise<void> {
     const assistant = this.getAssistant();
+    const unavailable = assistant.unavailableReason();
+    if (unavailable) {
+      this.writeln(vt100.colorize(unavailable, vt100.FG_YELLOW));
+      return;
+    }
     let statuses: Array<{ model: AIModel; installed: boolean | null }>;
     try {
       statuses = await assistant.getModelStatuses();

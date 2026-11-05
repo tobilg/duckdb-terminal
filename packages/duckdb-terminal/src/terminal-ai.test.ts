@@ -168,6 +168,27 @@ describe('Local AI commands', () => {
       expect(progress.every((line) => line.length < 40)).toBe(true);
     });
 
+    it('explains on iPhone and iPad that the models cannot run there, without downloading', async () => {
+      const userAgent = Object.getOwnPropertyDescriptor(Navigator.prototype, 'userAgent')!;
+      Object.defineProperty(Navigator.prototype, 'userAgent', {
+        configurable: true,
+        get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+      });
+      try {
+        type('.model 1\r');
+        await waitForOutput('need more memory than a browser tab gets on iPhone and iPad');
+        await waitUntilIdle();
+        type('.ai hi\r');
+        await vi.waitFor(() => expect(output().match(/browser tab gets on iPhone and iPad/g)).toHaveLength(2));
+        await waitUntilIdle();
+      } finally {
+        Object.defineProperty(Navigator.prototype, 'userAgent', userAgent);
+      }
+      expect(output()).not.toContain('(yes/no)');
+      expect(mock.state.downloads).toEqual([]);
+      expect(mock.state.loads).toEqual([]);
+    });
+
     it('selects an installed model without asking again', async () => {
       mock.state.cachedUrls.add(getModelUrl(AI_MODELS[2]));
       type('.model 3\r');
